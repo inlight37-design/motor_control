@@ -1,0 +1,32 @@
+# C++/ROS2 빌드 산출물
+cpp/build/
+cpp/install/
+cpp/log/
+
+# 실험 데이터 (런타임에 자동 생성됨)
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# 보안 — 혹시 모를 자격 증명 누락 방지
+.env
+.env.*
+*.pem
+*.key
+secrets.json

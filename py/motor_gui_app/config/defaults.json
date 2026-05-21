@@ -1,0 +1,64 @@
+{
+  "motor": {
+    "max_rpm": 3000,
+    "manual_rpm_limit": 3000,
+    "accel_rpm_s": 5000,
+    "rt_cpu": 1,
+    "command_hz": 200,
+    "cmd_timeout_ms": 0,
+    "heartbeat_timeout_ms": 500
+  },
+  "position": {
+    "lead_mm_rev": 5.0,
+    "ticks_per_rev": 2000
+  },
+  "waveform": {
+    "freq_hz": 1.0,
+    "freq_end_hz": 10.0,
+    "duration_s": 30.0,
+    "amp_rpm": 500,
+    "offset_rpm": 0
+  },
+  "force": {
+    "target_N": 0.0,
+    "max_rpm": 50,
+    "output_alpha": 0.3,
+    "force_abs_mode": true,
+    "soft_limit_N": 100.0,
+    "soft_start_pct": 70,
+    "pid": {
+      "kp": 0.5,
+      "ki": 0.05,
+      "kd": 0.01
+    },
+    "tanh": {
+      "sensitivity_N": 1.0,
+      "deadband_N": 0.01
+    },
+    "waveform": {
+      "freq_hz": 1.0,
+      "amp_N": 10.0,
+      "offset_N": 0.0
+    }
+  },
+  "load_cell": {
+    "data_rate_hz": 250.0,
+    "change_trigger": 0.0
+  },
+  "hysteresis": {
+    "freq_hz": 1.0,
+    "motion_mode": "velocity",
+    "unit": "mm",
+    "amp_mm": 10.0,
+    "amp_rpm": 500.0,
+    "lead_mm_rev": 5.0,
+    "offset_rpm": 0,
+    "settle_cycles": 1,
+    "record_cycles": 3
+  },
+  "linear_encoder": {
+    "channel": 0,
+    "counts_per_mm": 314.4,
+    "invert": false
+  }
+}
