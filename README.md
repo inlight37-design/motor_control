@@ -1,168 +1,104 @@
 # Motor_gui_jh
 
-모터 GUI와 C++ ROS2 제어 노드를 한 폴더에서 보기 쉽게 묶은 배포용 구조입니다.
+EPOS4 기반 모터를 GUI/CLI에서 제어하고, C++ ROS2 노드가 1 kHz RT 루프로 EtherCAT 출력을 담당하는 실험용 제어 앱입니다.
 
-## 폴더 구조
+## 한눈에 보기
 
-- `run_gui.py`: GUI 실행 런처.
-- `run_cli.py`: GUI 없이 상태 확인/간단한 제어 명령을 보내는 CLI 런처.
-- `py/`: Python GUI, 로그 분석 도구, 센서 노드 코드.
-  - `motor_gui_app/`: 메인 모터 GUI 코드.
-    - `core/config.py`: 실행 경로/환경변수와 `config/defaults.json`을 읽어 타입 있는 기본값 상수로 공개하는 설정 로더.
-    - `core/topics.py`: GUI와 C++ 노드가 공유하는 ROS2 토픽 이름.
-    - `core/epos_errors.py`: EPOS4 에러 코드 설명표.
-    - `core/feedback_state.py`: 모터, RT 진단, 로드셀, 리니어 엔코더 최신 피드백 값 컨테이너.
-    - `core/load_cell_calibration.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 캘리브레이션 JSON 해석.
-    - `core/linear_encoder_math.py`: GUI 내장 리니어 엔코더 리더와 ROS2 노드가 공유하는 count/mm 변환.
-    - `core/iir_filter.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 1차 IIR 필터.
-    - `core/motor_units.py`: 위치 tick/mm 변환처럼 모터 단위 계산을 공유하는 유틸.
-    - `core/control_client.py`: GUI/CLI가 공유하는 고수준 제어 API.
-    - `core/session/`: 제어 API, 상태 조회, 실행 플래그를 묶는 세션 모델.
-    - `core/ros_environment.py`: ROS2/DDS 환경 설정과 EtherCAT 인터페이스 감지.
-    - `core/ros_bootstrap.py`: `rclpy` import 전에 필요한 DDS 환경 준비.
-    - `core/motor_process.py`: C++ `epos_motor_node` 실행 명령 조립.
-  - `tools/`: 실험 보조 도구. 로그 분석, 장력 루프 CLI, 로드셀 캘리브레이션 GUI.
-- `cpp/`: C++/ROS2 colcon 워크스페이스.
-  - `README.md`: C++ 빌드, 직접 실행, 패키지/토픽/파라미터 설명.
-  - `src/epos_control/include/control/`: 속도/위치/힘 제어 계산, PID, slew-rate 제한.
-  - `src/epos_control/include/safety/`: 힘 한계와 최종 출력 안전장치.
-  - `src/epos_control/include/ethercat/`: EPOS 레지스터, PDO 구조, CiA402, EtherCAT 초기 설정.
-  - `src/epos_control/include/logging/`: CSV 로거, 로그 명령, 로그 파일 경로 헬퍼.
-  - `src/epos_control/include/waveform/`: 파형 생성과 히스테리시스 계획.
-  - `src/epos_control/include/commands/`: GUI/스크립트 명령 파싱.
-  - `src/epos_control/include/util/`: 단위 변환, 네트워크 감지, RT 설정, 링버퍼.
-- `logs/`: CSV 로그와 분석 결과 기본 저장 위치.
-
-## 아키텍처 한눈에 보기
-
-### 시스템 구성 (프로세스/하드웨어)
+| 구분 | 내용 |
+| --- | --- |
+| 목적 | 모터 속도/위치/토크 제어, 힘 제어, 파형/히스테리시스 실험, CSV 로깅 |
+| 실행 | GUI는 `python3 run_gui.py`, CLI는 `python3 run_cli.py` |
+| Python | 화면, 사용자 동작, 명령 큐, 센서 직접 읽기, 상태 표시 |
+| C++ | ROS2 토픽 수신, 1 kHz RT 제어 루프, EtherCAT PDO, 안전 정지, CSV 로그 |
+| 센서 | 로드셀과 리니어 엔코더는 GUI 내장 리더 또는 독립 ROS2 노드 중 하나로 사용 |
+| 안전 | Python soft limit + C++ hard force limit + heartbeat timeout + fault 처리 |
 
 ```mermaid
 flowchart LR
-    subgraph PY["🐍 Python 프로세스 (run_gui.py / run_cli.py)"]
-        UI[PyQt5 GUI<br/>panels + actions]
-        CLI[CLI shell<br/>argparse]
-        CC[ControlClient<br/>고수준 명령 API]
-        CT[CommandThread<br/>200 Hz]
-        MT[MonitorThread<br/>ROS2 spin]
-        LCR[LoadCellReader<br/>Phidget 1046]
-        LER[LinearEncoderReader<br/>Phidget Encoder]
-        UI --> CC
-        CLI --> CC
-        CC --> CT
-        MT --> UI
-        LCR --> CT
-        LER --> CT
-    end
-
-    subgraph CPP["⚙️ C++ 프로세스 (epos_motor_node, sudo + chrt -f 50)"]
-        ROS_CB[ROS2 subscriber<br/>callbacks]
-        ATOM[(atomic 변수<br/>lock-free)]
-        RT[RT control loop<br/>1 kHz<br/>SCHED_FIFO + mlockall]
-        LOG[AsyncLogger thread<br/>10 ms drain]
-        CSV[(CSV file)]
-        ROS_CB -->|store| ATOM
-        ATOM -->|load| RT
-        RT -->|push_record| LOG
-        LOG --> CSV
-        RT -->|publish 50 Hz| ROS_PUB[ROS2 publishers]
-    end
-
-    subgraph HW["🔌 하드웨어"]
-        PHID[Phidget USB hub]
-        EPOS[Maxon EPOS4 drive]
-        MOTOR[BLDC motor + encoder]
-    end
-
-    CT -.->|"ROS2 토픽<br/>/target_speed, /op_mode_cmd<br/>/epos/force_ctrl_cmd_v2 ..."| ROS_CB
-    ROS_PUB -.->|"/measured_speed<br/>/epos/status_word<br/>/epos/diag_summary ..."| MT
-
-    LCR <-.->|USB| PHID
-    LER <-.->|USB| PHID
-    RT <-.->|EtherCAT PDO<br/>1 ms cycle| EPOS
-    EPOS --> MOTOR
-    MOTOR -->|encoder feedback| EPOS
+    UI[GUI / CLI] --> API[ControlClient]
+    API --> CMD[CommandThread<br/>200 Hz]
+    CMD --> TOPIC[ROS2 topics]
+    TOPIC --> NODE[C++ epos_motor_node]
+    NODE --> RT[RT loop<br/>1 kHz]
+    RT --> EPOS[EtherCAT<br/>EPOS4]
+    EPOS --> MOTOR[Motor]
+    NODE --> FB[feedback topics]
+    FB --> MON[MonitorThread]
+    MON --> UI
+    SENSOR[Load cell / Linear encoder] --> CMD
 ```
 
-### 명령 한 번이 전달되는 경로 (예: "RPM 50으로 돌려")
+## 빠른 시작
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as 사용자
-    participant Panel as panels/<br/>motion_control_panel
-    participant Act as actions/<br/>motion_actions
-    participant Cli as core/<br/>control_client
-    participant Cmd as core/<br/>commander (200 Hz)
-    participant Topic as ROS2 토픽
-    participant CB as C++ callback
-    participant At as atomic
-    participant RT as RT loop (1 kHz)
-    participant Mot as EPOS4 + Motor
-
-    U->>Panel: "수동 입력" 버튼 클릭
-    Panel->>Act: send_manual_rpm(window)
-    Act->>Cli: set_manual_rpm(50.0)
-    Cli->>Cmd: commander.set_manual_target_rpm(50.0)
-    Note over Cmd: _lock 안에서 멤버 변수 갱신
-    Cmd->>Topic: pub.publish(Int32(50)) (다음 사이클)
-    Topic->>CB: ROS2 콜백 호출
-    CB->>At: target_.store(50)
-    Note over RT: 매 1 ms 깨어남<br/>clock_nanosleep
-    RT->>At: target_.load() → 50
-    RT->>RT: slew-rate limiter +<br/>output_safety_guard
-    RT->>Mot: EtherCAT PDO write (target_velocity=50)
-    Mot-->>RT: PDO read (actual_velocity, status)
+```bash
+cd /home/user/K-FLEX/TS_vivration_project/Motor_gui_jh
+source /opt/ros/jazzy/setup.bash
+cd cpp && ./build_cpp.sh
+cd .. && python3 run_gui.py
 ```
 
-### RT 루프 1ms 안에서 일어나는 일
+CLI 상태 확인:
 
-```mermaid
-flowchart TB
-    Start([1 ms 깨어남<br/>clock_nanosleep]) --> PDO_R[EtherCAT<br/>PDO 읽기]
-    PDO_R --> WKC{WKC > 0?}
-    WKC -->|no| Skip[제어 건너뜀<br/>+ 에러 카운트]
-    WKC -->|yes| Read[in: status_word<br/>actual_pos / vel / trq]
-    Read --> Fault{Fault?}
-    Fault -->|yes| FR[Fault Reset 시퀀스<br/>target 0으로 리셋]
-    Fault -->|no| Mode{op_mode}
-    Mode -->|9 CSV 속도| VC[velocity_control<br/>+ slew_rate_limiter]
-    Mode -->|8 CSP 위치| PC[position_control<br/>P-gain → CSV 변환]
-    Mode -->|10 CST 토크| TC[토크 pass-through]
-    VC --> FC{force_ctrl<br/>active?}
-    PC --> FC
-    TC --> FC
-    FC -->|yes| FPID[force_pid<br/>또는 force_tanh<br/>+ 출력 LPF]
-    FC -->|no| Limit[check_force_limit<br/>로드셀 한계]
-    FPID --> Limit
-    Limit --> Safe[apply_output_safety<br/>fault / timeout /<br/>heartbeat / max_rpm]
-    Safe --> CW[CiA402<br/>control_word 결정]
-    CW --> PDO_W[EtherCAT<br/>PDO 쓰기]
-    PDO_W --> Logr[push_record →<br/>SPSC ring buffer]
-    Logr --> Next([다음 사이클 대기])
-    FR --> Next
-    Skip --> Next
+```bash
+cd /home/user/K-FLEX/TS_vivration_project/Motor_gui_jh
+python3 run_cli.py config
+python3 run_cli.py status --seconds 2 --hz 5
 ```
+
+## 어디를 보면 되나
+
+| 하고 싶은 일 | 먼저 볼 위치 |
+| --- | --- |
+| GUI 버튼/화면 수정 | `py/motor_gui_app/panels/`, `py/motor_gui_app/actions/` |
+| GUI와 CLI 공통 제어 흐름 수정 | `py/motor_gui_app/core/control_client.py` |
+| ROS2 명령 발행/센서값 발행 수정 | `py/motor_gui_app/core/commander.py` |
+| 모터/로드셀/엔코더 최신 상태 조회 수정 | `py/motor_gui_app/core/monitor.py`, `core/feedback_state.py` |
+| 설정 기본값 수정 | `py/motor_gui_app/config/defaults.json` |
+| 토픽 이름 수정 | `py/motor_gui_app/core/topics.py` |
+| C++ 실시간 제어/안전 로직 수정 | `cpp/src/epos_control/include/control/`, `include/safety/` |
+| EtherCAT/EPOS4 저수준 처리 수정 | `cpp/src/epos_control/include/ethercat/`, `src/epos_motor_node.cpp` |
+
+## 폴더 구조
+
+```text
+Motor_gui_jh/
+├── run_gui.py                 # GUI 실행
+├── run_cli.py                 # CLI 실행
+├── py/motor_gui_app/
+│   ├── app/                   # Qt/rclpy 앱 진입점
+│   ├── cli/                   # argparse 기반 CLI
+│   ├── core/                  # GUI/CLI 공용 제어, 설정, ROS2 통신, 상태
+│   ├── devices/               # GUI 프로세스 안에서 직접 읽는 Phidget 장치
+│   ├── nodes/                 # GUI 없이 센서만 퍼블리시하는 ROS2 노드
+│   ├── panels/                # PyQt 위젯 생성/배치
+│   ├── actions/               # 버튼/입력 이벤트 처리
+│   └── ui/                    # 메인 윈도우, 런타임 객체, 화면 갱신
+├── py/tools/                  # 로그 분석, 캘리브레이션 등 보조 도구
+├── cpp/                       # ROS2 colcon 워크스페이스
+│   └── src/epos_control/      # EPOS4 EtherCAT 제어 노드
+└── logs/                      # CSV 로그 기본 저장 위치
+```
+
+상세 구조는 `py/motor_gui_app/README.md`와 `cpp/README.md`에 나눠 적어두었습니다.
 
 ## 현재 분리 기준
 
-이번 정리 후 Python 쪽은 “보이는 화면”, “사용자 동작”, “공유 제어 로직”, “장치 접근”, “독립 ROS2 노드”가 나뉘어 있습니다.
+Python 쪽은 화면 생성(`panels/`), 사용자 동작(`actions/`), 공용 제어 API(`core/control_client.py`), 런타임 스레드(`core/commander.py`, `core/monitor.py`), 장치 접근(`devices/`, `nodes/`)으로 나눴습니다. GUI와 CLI는 같은 `ControlClient`와 명령 경로를 사용합니다.
 
-- `panels/`는 위젯을 만들고 배치합니다. 버튼을 눌렀을 때의 실제 처리는 `actions/`로 넘깁니다.
-- `actions/`는 GUI 이벤트를 받아 `core/control_client.py`, 세션 상태, 장치 리더를 호출합니다.
-- `core/`는 GUI와 CLI가 같이 쓰는 설정, ROS2 통신, 명령 생성, 상태 조회, 실험 실행 흐름을 맡습니다.
-- `devices/`는 GUI 프로세스 안에서 Phidget 장치를 직접 읽을 때 사용합니다.
-- `nodes/`는 GUI 없이 센서만 ROS2 토픽으로 퍼블리시할 때 사용합니다.
+공유 계산만 `core/`로 뺐습니다. 예를 들어 로드셀 캘리브레이션, IIR 필터, 리니어 엔코더 count/mm 변환, 모터 tick/mm 변환은 공용 모듈에 있고, 장치 연결과 콜백 처리는 `devices/`와 `nodes/`에 남겨두었습니다.
 
-지금 구조는 일부러 “완전한 플러그인 시스템”까지는 가지 않았습니다. 로드셀 캘리브레이션/IIR 필터, 리니어 엔코더 count/mm 변환, 모터 tick/mm 변환처럼 GUI 리더와 독립 노드 또는 UI 로직이 같이 쓰는 계산만 `core/`로 빼고, 장치 연결 자체는 `devices/`와 `nodes/`에 남겼습니다. 그래서 새 모터나 센서를 추가할 때 공통 계산/토픽/상태 저장 위치는 명확하지만, 작은 파일이 불필요하게 더 쪼개지는 부담은 줄였습니다.
+GUI 런타임 객체 접근 경로는 아래처럼 통일했습니다.
 
-클로드 코드 리뷰 후 `window.commander`, `window.monitor`, `window.control`, `window.lc_reader`, `window.linear_encoder` 같은 GUI alias는 제거했습니다. 런타임 객체는 `window.runtime_threads`, 센서 리더는 `window.device_readers`, 제어 API와 상태 조회는 `window.session`을 보면 됩니다. `window.motor_running` 같은 실행 플래그 property는 기존 UI 코드 호환을 위해 `session.flags`로 연결되어 있습니다.
+| 객체 | 접근 경로 |
+| --- | --- |
+| 백그라운드 스레드 | `window.runtime_threads.commander`, `window.runtime_threads.monitor`, `window.runtime_threads.node_runner` |
+| 센서 리더 | `window.device_readers.load_cell`, `window.device_readers.linear_encoder` |
+| 제어 API와 상태 조회 | `window.session.control`, `window.session.state` |
+| 실행 플래그 | `window.session.flags` 또는 호환 property인 `window.motor_running` 등 |
 
-`CommandThread`의 200 Hz 루프는 heartbeat, 센서 피드백 발행, 명령 큐 처리, 수동/스크립트 목표 계산, 소프트 리미트 적용이 메서드 단위로 나뉘어 있습니다. 새 센서 발행을 추가할 때는 `commander.py`의 `_publish_*_feedback()` 계열, 새 명령 경로는 `_drain_command_queues()` 쪽을 먼저 보면 됩니다.
+`CommandThread`의 200 Hz 루프는 heartbeat, 센서 피드백 발행, 명령 큐 처리, 수동/스크립트 목표 계산, 소프트 리미트 적용으로 나뉘어 있습니다. 새 센서 발행은 `_publish_*_feedback()` 계열, 새 명령 경로는 `_drain_command_queues()` 쪽을 먼저 보면 됩니다.
 
-로드셀 힘 한계는 두 단계로 적용됩니다. Python `CommandThread`는 설정한 한계의 soft-start 지점부터 RPM 명령을 서서히 줄이고, C++ RT 루프는 같은 한계를 hard stop 조건으로 다시 확인합니다. 즉 Python은 부드러운 감속, C++는 마지막 안전 정지를 맡습니다.
-
-GUI 내장 센서 리더와 독립 센서 노드는 같은 ROS2 토픽을 사용할 수 있습니다. 같은 토픽에 publisher가 둘 이상 감지되면 GUI 로그에 경고를 띄우지만, 실험 데이터가 섞이지 않게 실제 운용에서는 둘 중 하나만 켜는 편이 좋습니다.
+로드셀 힘 한계는 두 단계입니다. Python은 soft-start 지점부터 RPM 명령을 서서히 줄이고, C++ RT 루프는 같은 한계를 hard stop 조건으로 다시 확인합니다. GUI 내장 센서 리더와 독립 센서 노드를 같은 토픽에 동시에 켜면 GUI 로그에 경고가 뜨지만, 실험 중에는 한쪽만 사용하는 것이 안전합니다.
 
 ## 설정 파일과 설정 로더
 
