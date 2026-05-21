@@ -157,7 +157,7 @@ GUI 런타임 객체 접근 경로는 아래처럼 통일했습니다.
 
 `CommandThread`의 200 Hz 루프는 heartbeat, 센서 피드백 발행, 명령 큐 처리, 수동/스크립트 목표 계산, 소프트 리미트 적용으로 나뉘어 있습니다. 새 센서 발행은 `_publish_*_feedback()` 계열, 새 명령 경로는 `_drain_command_queues()` 쪽을 먼저 보면 됩니다.
 
-로드셀 힘 한계는 두 단계입니다. Python은 soft-start 지점부터 RPM 명령을 서서히 줄이고, C++ RT 루프는 같은 한계를 hard stop 조건으로 다시 확인합니다. GUI 내장 센서 리더와 독립 센서 노드를 같은 토픽에 동시에 켜면 GUI 로그에 경고가 뜨지만, 실험 중에는 한쪽만 사용하는 것이 안전합니다.
+로드셀 힘 한계는 두 단계입니다. Python은 soft-start 지점부터 RPM 명령을 서서히 줄이고(이 단계는 GUI 내장 `LoadCellReader`가 USB로 직접 연결된 경우에만 동작합니다), C++ RT 루프는 같은 한계를 hard stop 조건으로 다시 확인합니다(`check_force_limit`, 외부 토픽으로 값을 받아도 동작). GUI 내장 센서 리더와 독립 센서 노드를 같은 토픽에 동시에 켜면 `CommandThread`가 GUI 로그에 경고를 띄우지만, 실험 중에는 한쪽만 사용하는 것이 안전합니다.
 
 ## 설정 파일과 설정 로더
 
