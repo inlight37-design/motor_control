@@ -31,6 +31,117 @@
   - `src/epos_control/include/util/`: 단위 변환, 네트워크 감지, RT 설정, 링버퍼.
 - `logs/`: CSV 로그와 분석 결과 기본 저장 위치.
 
+## 아키텍처 한눈에 보기
+
+### 시스템 구성 (프로세스/하드웨어)
+
+```mermaid
+flowchart LR
+    subgraph PY["🐍 Python 프로세스 (run_gui.py / run_cli.py)"]
+        UI[PyQt5 GUI<br/>panels + actions]
+        CLI[CLI shell<br/>argparse]
+        CC[ControlClient<br/>고수준 명령 API]
+        CT[CommandThread<br/>200 Hz]
+        MT[MonitorThread<br/>ROS2 spin]
+        LCR[LoadCellReader<br/>Phidget 1046]
+        LER[LinearEncoderReader<br/>Phidget Encoder]
+        UI --> CC
+        CLI --> CC
+        CC --> CT
+        MT --> UI
+        LCR --> CT
+        LER --> CT
+    end
+
+    subgraph CPP["⚙️ C++ 프로세스 (epos_motor_node, sudo + chrt -f 50)"]
+        ROS_CB[ROS2 subscriber<br/>callbacks]
+        ATOM[(atomic 변수<br/>lock-free)]
+        RT[RT control loop<br/>1 kHz<br/>SCHED_FIFO + mlockall]
+        LOG[AsyncLogger thread<br/>10 ms drain]
+        CSV[(CSV file)]
+        ROS_CB -->|store| ATOM
+        ATOM -->|load| RT
+        RT -->|push_record| LOG
+        LOG --> CSV
+        RT -->|publish 50 Hz| ROS_PUB[ROS2 publishers]
+    end
+
+    subgraph HW["🔌 하드웨어"]
+        PHID[Phidget USB hub]
+        EPOS[Maxon EPOS4 drive]
+        MOTOR[BLDC motor + encoder]
+    end
+
+    CT -.->|"ROS2 토픽<br/>/target_speed, /op_mode_cmd<br/>/epos/force_ctrl_cmd_v2 ..."| ROS_CB
+    ROS_PUB -.->|"/measured_speed<br/>/epos/status_word<br/>/epos/diag_summary ..."| MT
+
+    LCR <-.->|USB| PHID
+    LER <-.->|USB| PHID
+    RT <-.->|EtherCAT PDO<br/>1 ms cycle| EPOS
+    EPOS --> MOTOR
+    MOTOR -->|encoder feedback| EPOS
+```
+
+### 명령 한 번이 전달되는 경로 (예: "RPM 50으로 돌려")
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 사용자
+    participant Panel as panels/<br/>motion_control_panel
+    participant Act as actions/<br/>motion_actions
+    participant Cli as core/<br/>control_client
+    participant Cmd as core/<br/>commander (200 Hz)
+    participant Topic as ROS2 토픽
+    participant CB as C++ callback
+    participant At as atomic
+    participant RT as RT loop (1 kHz)
+    participant Mot as EPOS4 + Motor
+
+    U->>Panel: "수동 입력" 버튼 클릭
+    Panel->>Act: send_manual_rpm(window)
+    Act->>Cli: set_manual_rpm(50.0)
+    Cli->>Cmd: commander.set_manual_target_rpm(50.0)
+    Note over Cmd: _lock 안에서 멤버 변수 갱신
+    Cmd->>Topic: pub.publish(Int32(50)) (다음 사이클)
+    Topic->>CB: ROS2 콜백 호출
+    CB->>At: target_.store(50)
+    Note over RT: 매 1 ms 깨어남<br/>clock_nanosleep
+    RT->>At: target_.load() → 50
+    RT->>RT: slew-rate limiter +<br/>output_safety_guard
+    RT->>Mot: EtherCAT PDO write (target_velocity=50)
+    Mot-->>RT: PDO read (actual_velocity, status)
+```
+
+### RT 루프 1ms 안에서 일어나는 일
+
+```mermaid
+flowchart TB
+    Start([1 ms 깨어남<br/>clock_nanosleep]) --> PDO_R[EtherCAT<br/>PDO 읽기]
+    PDO_R --> WKC{WKC > 0?}
+    WKC -->|no| Skip[제어 건너뜀<br/>+ 에러 카운트]
+    WKC -->|yes| Read[in: status_word<br/>actual_pos / vel / trq]
+    Read --> Fault{Fault?}
+    Fault -->|yes| FR[Fault Reset 시퀀스<br/>target 0으로 리셋]
+    Fault -->|no| Mode{op_mode}
+    Mode -->|9 CSV 속도| VC[velocity_control<br/>+ slew_rate_limiter]
+    Mode -->|8 CSP 위치| PC[position_control<br/>P-gain → CSV 변환]
+    Mode -->|10 CST 토크| TC[토크 pass-through]
+    VC --> FC{force_ctrl<br/>active?}
+    PC --> FC
+    TC --> FC
+    FC -->|yes| FPID[force_pid<br/>또는 force_tanh<br/>+ 출력 LPF]
+    FC -->|no| Limit[check_force_limit<br/>로드셀 한계]
+    FPID --> Limit
+    Limit --> Safe[apply_output_safety<br/>fault / timeout /<br/>heartbeat / max_rpm]
+    Safe --> CW[CiA402<br/>control_word 결정]
+    CW --> PDO_W[EtherCAT<br/>PDO 쓰기]
+    PDO_W --> Logr[push_record →<br/>SPSC ring buffer]
+    Logr --> Next([다음 사이클 대기])
+    FR --> Next
+    Skip --> Next
+```
+
 ## 현재 분리 기준
 
 이번 정리 후 Python 쪽은 “보이는 화면”, “사용자 동작”, “공유 제어 로직”, “장치 접근”, “독립 ROS2 노드”가 나뉘어 있습니다.
