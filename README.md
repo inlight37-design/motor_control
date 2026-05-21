@@ -137,7 +137,8 @@ Motor_gui_jh/
 └── logs/                      # CSV 로그 기본 저장 위치
 ```
 
-상세 구조는 `py/motor_gui_app/README.md`와 `cpp/README.md`에 나눠 적어두었습니다.
+전체 파일/동작별 블록다이어그램은 [docs/architecture_map.md](docs/architecture_map.md)에 따로 크게 정리했습니다.
+세부 설명은 `py/motor_gui_app/README.md`와 `cpp/README.md`에 나눠 적어두었습니다.
 
 ## 현재 분리 기준
 
