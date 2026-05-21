@@ -28,6 +28,64 @@ flowchart LR
     SENSOR[Load cell / Linear encoder] --> CMD
 ```
 
+## 코드가 도는 방식
+
+| 루프/스레드 | 주기 | 하는 일 |
+| --- | --- | --- |
+| Qt main loop | 이벤트 기반 | 버튼, 입력창, 화면 이벤트 처리 |
+| GUI update timers | 33 ms / 100 ms | 그래프/상태 표시 갱신, 로그 flush |
+| `CommandThread` | 200 Hz | 목표 RPM 발행, heartbeat, 센서값 발행, 명령 큐 처리 |
+| `MonitorThread` | spin loop | C++ 피드백 토픽 구독, fault 상태 감시 |
+| C++ RT loop | 1 kHz | EtherCAT PDO 읽기/쓰기, 제어 계산, 최종 안전장치 |
+| C++ feedback/log | 50 Hz / 비동기 | GUI 피드백 발행, CSV 로그 기록 |
+
+명령은 GUI와 CLI 어디에서 시작해도 같은 길로 들어갑니다.
+
+```mermaid
+sequenceDiagram
+    participant User as 사용자
+    participant UI as GUI/CLI
+    participant Client as ControlClient
+    participant Cmd as CommandThread 200 Hz
+    participant Topic as ROS2 topic
+    participant Cb as C++ callback
+    participant Rt as RT loop 1 kHz
+    participant Drive as EPOS4
+
+    User->>UI: RPM/위치/힘/파형 명령
+    UI->>Client: 고수준 제어 API 호출
+    Client->>Cmd: 명령 큐 또는 목표값 갱신
+    Cmd->>Topic: ROS2 메시지 발행
+    Topic->>Cb: subscriber callback
+    Cb->>Rt: atomic 변수 갱신
+    Rt->>Rt: 제어 계산 + 안전 검사
+    Rt->>Drive: EtherCAT PDO write
+    Drive-->>Rt: actual pos/vel/trq
+```
+
+C++의 1 ms 루프는 아래 순서로 짧게 반복됩니다.
+
+```mermaid
+flowchart LR
+    A[PDO read] --> B{Fault?}
+    B -->|yes| C[Fault reset<br/>target 0]
+    B -->|no| D{Mode}
+    D -->|CSV| E[velocity control<br/>slew limit]
+    D -->|CSP| F[position P control]
+    D -->|CST| G[torque pass-through]
+    E --> H{Force control?}
+    F --> H
+    G --> H
+    H -->|yes| I[PID/Tanh force loop]
+    H -->|no| J[keep command]
+    I --> K[force hard limit]
+    J --> K
+    K --> L[output safety<br/>fault/timeout/heartbeat/max rpm]
+    L --> M[control word + target]
+    M --> N[PDO write]
+    N --> O[async log push]
+```
+
 ## 빠른 시작
 
 ```bash
