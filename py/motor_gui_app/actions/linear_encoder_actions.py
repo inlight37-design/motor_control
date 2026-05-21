@@ -5,12 +5,19 @@ import threading
 from ..core.time_utils import now_str
 
 
+def _reader(window):
+    """현재 GUI 세션의 리니어 엔코더 리더를 반환."""
+    device_readers = getattr(window, "device_readers", None)
+    return None if device_readers is None else device_readers.linear_encoder
+
+
 def update_settings(window):
     """리니어 엔코더 환산/방향 설정을 Reader에 반영."""
-    if not hasattr(window, "linear_encoder"):
+    reader = _reader(window)
+    if reader is None:
         return
     widgets = window.linear_encoder_widgets
-    window.linear_encoder.configure(
+    reader.configure(
         counts_per_mm=widgets.counts_per_mm_spin.value(),
         invert=widgets.invert_checkbox.isChecked(),
     )
@@ -19,8 +26,11 @@ def update_settings(window):
 def toggle_linear_encoder(window):
     """Phidget 리니어 엔코더를 연결하거나 해제한다."""
     widgets = window.linear_encoder_widgets
-    if window.linear_encoder.connected:
-        window.linear_encoder.disconnect()
+    reader = _reader(window)
+    if reader is None:
+        return
+    if reader.connected:
+        reader.disconnect()
         widgets.connect_button.setText("Linear Enc 연결")
         widgets.connect_button.setEnabled(True)
         widgets.zero_button.setEnabled(False)
@@ -39,7 +49,7 @@ def toggle_linear_encoder(window):
     widgets.status_label.setStyleSheet("color: #ffb74d; font-size: 10px; font-weight: bold;")
 
     def try_connect():
-        ok, msg = window.linear_encoder.connect(channel)
+        ok, msg = reader.connect(channel)
         window.linear_encoder_connect_result_signal.emit(ok, msg)
 
     threading.Thread(target=try_connect, daemon=True).start()
@@ -68,7 +78,10 @@ def on_linear_encoder_connect_result(window, ok: bool, msg: str):
 
 def zero_linear_encoder(window):
     """현재 리니어 엔코더 위치를 0으로 설정."""
-    window.linear_encoder.zero()
+    reader = _reader(window)
+    if reader is None:
+        return
+    reader.zero()
     window.update_log(f"[{now_str()}] 리니어 엔코더 Zero 설정")
     update_display(window)
 
@@ -78,13 +91,14 @@ def update_display(window):
     widgets = getattr(window, "linear_encoder_widgets", None)
     if widgets is None:
         return
-    if window.linear_encoder.connected:
-        count = window.linear_encoder.get_position_count()
-        mm = window.linear_encoder.get_position_mm()
+    reader = _reader(window)
+    if reader is not None and reader.connected:
+        count = reader.get_position_count()
+        mm = reader.get_position_mm()
         widgets.pos_label.setText(f"Linear: {count:+d} cnt / {mm:+.3f} mm")
         widgets.pos_label.setStyleSheet("color: #2e7d32; font-size: 11px; font-weight: bold;")
-        if window.linear_encoder.serial:
-            widgets.status_label.setText(f"LE: CH{window.linear_encoder.channel} S/N {window.linear_encoder.serial}")
+        if reader.serial:
+            widgets.status_label.setText(f"LE: CH{reader.channel} S/N {reader.serial}")
             widgets.status_label.setStyleSheet("color: #44bb44; font-size: 10px; font-weight: bold;")
     elif window.session.state and window.session.state.linear_fresh():
         count = window.session.state.linear_count()

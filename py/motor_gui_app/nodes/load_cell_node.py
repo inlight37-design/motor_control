@@ -72,6 +72,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, String
 
 try:
+    from motor_gui_app.core.iir_filter import IIRFilter
     from motor_gui_app.core.load_cell_calibration import (
         calibration_to_grams,
         load_calibration_channels,
@@ -87,6 +88,7 @@ try:
     )
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from motor_gui_app.core.iir_filter import IIRFilter
     from motor_gui_app.core.load_cell_calibration import (
         calibration_to_grams,
         load_calibration_channels,
@@ -102,39 +104,7 @@ except ImportError:
     )
 
 # ══════════════════════════════════════════════════════════════════
-# 1. IIR 저역통과 필터 (1차 지수이동평균)
-# ══════════════════════════════════════════════════════════════════
-# 로드셀의 고주파 노이즈를 제거하기 위한 디지털 필터.
-# C++ force_pid.hpp의 D항 LPF와 동일한 원리:
-#   출력 = alpha × 새값 + (1 - alpha) × 이전값
-#
-# alpha가 작을수록 부드럽지만 반응이 느림.
-# alpha=0.1이면 새 측정값의 10%만 반영 → 급격한 변화를 억제.
-class IIRFilter:
-    def __init__(self, alpha: float = 0.1):
-        self.alpha = alpha      # 필터 계수 (0~1)
-        self._prev = None       # 이전 출력값 (None = 첫 호출)
-
-    def process(self, value: float) -> float:
-        """새 값을 필터링하여 반환.
-
-        첫 호출 시에는 필터링 없이 그대로 반환 (이전 값이 없으므로).
-        이후부터는 지수이동평균(EMA) 적용.
-        """
-        if self._prev is None:
-            self._prev = value
-            return value
-        out = self.alpha * value + (1.0 - self.alpha) * self._prev
-        self._prev = out
-        return out
-
-    def reset(self):
-        """필터 상태 초기화 — 캘리브레이션 변경 시 호출하여 이전 값 영향 제거."""
-        self._prev = None
-
-
-# ══════════════════════════════════════════════════════════════════
-# 2. 채널 상태 관리 (ChannelState)
+# 채널 상태 관리 (ChannelState)
 # ══════════════════════════════════════════════════════════════════
 # 각 로드셀 채널(CH0, CH1)의 캘리브레이션, 필터, 측정값을 관리.
 #

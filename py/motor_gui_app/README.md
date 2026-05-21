@@ -196,6 +196,8 @@ ROS2 통신, 설정, 백그라운드 스레드처럼 앱 전체가 공유하는 
 - `feedback_state.py`: 모터, RT 진단, 로드셀, 리니어 엔코더 최신 피드백 값 컨테이너.
 - `load_cell_calibration.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 캘리브레이션 JSON 해석.
 - `linear_encoder_math.py`: GUI 내장 리니어 엔코더 리더와 ROS2 노드가 공유하는 count/mm 변환.
+- `iir_filter.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 1차 IIR 필터.
+- `motor_units.py`: 위치 tick/mm 변환처럼 UI 동작과 실험 로직이 함께 쓰는 모터 단위 계산.
 - `ros_environment.py`: rclpy import 전에 필요한 ROS2/DDS 환경 설정, FastDDS UDP 프로파일 생성, EtherCAT 인터페이스 감지.
 - `ros_bootstrap.py`: GUI/CLI/스레드가 공유하는 ROS2/DDS 준비 진입점.
 - `ros_messages.py`: `epos_interfaces`의 `ForceCtrlCmd`, `WaveformCmd` 사용 가능 여부 감지.
@@ -213,7 +215,6 @@ ROS2 통신, 설정, 백그라운드 스레드처럼 앱 전체가 공유하는 
 - `commander.py`: GUI 명령, heartbeat, 로드셀/엔코더 값을 ROS2로 퍼블리시하는 스레드.
 - `monitor.py`: 모터 피드백과 진단 토픽을 구독하는 스레드.
 - `node_runner.py`: C++ `epos_motor_node` 프로세스 시작/종료 관리.
-- `runtime.py`: 기존 `from runtime import *` 코드가 계속 동작하도록 Qt/ROS 공통 import와 core 유틸을 다시 내보내는 호환 레이어.
 
 `ForceCtrlCmd`, `WaveformCmd` 메시지가 빌드되어 있으면 v2 구조화 토픽을 사용하고, 메시지를 찾지 못하는 환경에서는 기존 문자열 토픽으로 되돌아갑니다.
 
@@ -276,7 +277,7 @@ PyQt 위젯을 만드는 모듈입니다. 가능한 한 “위젯 생성”에�
 
 GUI 안에서 직접 Phidget 장치를 읽는 코드입니다.
 
-- `load_cell.py`: GUI 내장 로드셀 리더, tare, N/g 변환. 캘리브레이션 JSON 해석은 `core/load_cell_calibration.py`를 공유합니다.
+- `load_cell.py`: GUI 내장 로드셀 리더, tare, N/g 변환. 캘리브레이션 JSON 해석은 `core/load_cell_calibration.py`, 필터는 `core/iir_filter.py`를 공유합니다.
 - `linear_encoder.py`: GUI 내장 리니어 엔코더 리더. count/mm 변환은 `core/linear_encoder_math.py`를 공유합니다.
 
 ### `nodes/`
@@ -312,9 +313,13 @@ UI나 ROS2에 직접 묶이지 않는 계산/검증 코드입니다.
 
 현재 분리는 용도 기준으로 적당한 편입니다. 원래 GUI 한 덩어리에 있던 책임을 화면 생성(`panels/`), 이벤트 처리(`actions/`), 공용 제어 API(`core/control_client.py`), 상태 조회(`core/session/state_view.py`), 실행 플래그(`core/session/flags.py`), 실험 흐름(`core/experiments/`)으로 나눴기 때문에 CLI와 GUI가 같은 제어 경로를 공유할 수 있습니다.
 
-과하게 쪼개지지 않도록 작은 계산은 필요할 때만 분리했습니다. 예를 들어 로드셀 캘리브레이션 JSON 해석은 GUI 리더와 ROS2 노드가 모두 쓰므로 `core/load_cell_calibration.py`에 두는 게 맞고, 리니어 엔코더는 count/mm 변환 정도만 `core/linear_encoder_math.py`로 공유합니다. 장치 연결과 콜백 처리는 여전히 `devices/`와 `nodes/`에 남아 있어 파일 수가 목적 없이 늘어나지는 않습니다.
+과하게 쪼개지지 않도록 작은 계산은 필요할 때만 분리했습니다. 예를 들어 로드셀 캘리브레이션 JSON 해석은 `core/load_cell_calibration.py`, 로드셀 IIR 필터는 `core/iir_filter.py`, 리니어 엔코더 count/mm 변환은 `core/linear_encoder_math.py`, 모터 tick/mm 변환은 `core/motor_units.py`가 공유합니다. 장치 연결과 콜백 처리는 여전히 `devices/`와 `nodes/`에 남아 있어 파일 수가 목적 없이 늘어나지는 않습니다.
 
-의도적으로 남긴 호환 계층도 있습니다. `core/runtime.py`는 예전 `from runtime import *` 스타일을 위한 레이어이고, `ui/runtime_init.py`는 `window.commander`, `window.monitor`, `window.lc_reader` 같은 alias를 아직 세팅합니다. 새 코드는 `window.runtime_threads`, `window.device_readers`, `window.session`을 우선 사용하면 되고, 기존 actions가 더 정리되면 alias를 줄이는 식으로 안전하게 마무리하면 됩니다.
+클로드 코드 리뷰에서 지적된 죽은 호환 계층은 정리했습니다. 더 이상 쓰이지 않던 `core/runtime.py`와 `MonitorThread.latest_*` alias property는 제거했고, ROS2/DDS 환경 준비도 앱/CLI 진입점에서 명시적으로 수행하도록 top-level import 부작용을 줄였습니다. GUI 쪽도 `window.commander`, `window.monitor`, `window.control`, `window.lc_reader`, `window.linear_encoder` alias를 제거해 `window.runtime_threads`, `window.device_readers`, `window.session`으로 접근 경로를 통일했습니다.
+
+`CommandThread.run()`은 여전히 하나의 200 Hz 명령 루프이지만, 내부 책임은 heartbeat, 센서 피드백 발행, 비동기 명령 큐 처리, 수동/스크립트 목표 계산, 소프트 리미트 적용 메서드로 분리했습니다. 그래서 새 센서나 명령 경로를 붙일 때 루프 전체를 다시 읽기보다 해당 메서드만 확인하면 됩니다.
+
+로드셀 힘 한계는 의도적으로 Python과 C++ 양쪽에 있습니다. Python `CommandThread`는 soft-start 비율부터 RPM 명령을 서서히 줄이는 완충 역할을 하고, C++ RT 루프는 같은 한계를 hard stop으로 다시 확인합니다. GUI 내장 센서 리더와 독립 센서 노드가 같은 토픽을 동시에 발행하면 로그에 경고가 뜨지만, 실험 중에는 한쪽만 켜는 것이 안전합니다.
 
 리뷰할 때 핵심 질문은 “새 센서/모터를 추가할 때 수정 위치가 예측 가능한가?”입니다. 지금 기준으로는 토픽은 `core/topics.py`, 최신값 구조는 `core/feedback_state.py`, 구독 노출은 `core/monitor.py`와 `core/session/state_view.py`, GUI 위젯은 `panels/`와 `ui/widget_groups.py`, 버튼 동작은 `actions/`, 공용 명령은 `core/control_client.py`와 `core/command_builders.py`로 이어집니다.
 

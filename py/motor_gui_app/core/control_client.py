@@ -222,7 +222,11 @@ class ControlClient:
             self.set_force_tare_offset(channel, offset_n)
 
     def set_force_limit(self, enabled: bool, limit_n: float, soft_start_pct: float) -> None:
-        """Python 소프트 리미트와 C++ 힘 한계를 함께 설정."""
+        """Python 소프트 리미트와 C++ hard force limit을 함께 설정.
+
+        Python 쪽은 limit_n의 soft_start_pct 지점부터 속도 명령을 줄이고,
+        C++ RT 루프는 같은 limit_n을 마지막 hard stop 조건으로 사용한다.
+        """
         safe_limit_n = max(0.1, float(limit_n))
         self.commander.set_soft_limit(bool(enabled), safe_limit_n, float(soft_start_pct))
         self.commander.send_force_ctrl_cmd(

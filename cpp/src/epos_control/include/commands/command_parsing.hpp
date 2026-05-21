@@ -286,10 +286,25 @@ struct ForceCommand {
 
 inline int parse_feedback_mode(const std::string& mode)
 {
+  if (mode == "ch0" || mode == "0") return 0;
   if (mode == "ch1" || mode == "1") return 1;
   if (mode == "avg" || mode == "average") return 2;
   if (mode == "max" || mode == "absmax") return 3;
   return 0;
+}
+
+inline bool is_valid_feedback_mode(const std::string& mode)
+{
+  return mode == "ch0" || mode == "0" ||
+         mode == "ch1" || mode == "1" ||
+         mode == "avg" || mode == "average" ||
+         mode == "max" || mode == "absmax";
+}
+
+inline void invalidate_force_command(ForceCommand& result, const std::string& error)
+{
+  result.kind = ForceCommandKind::INVALID;
+  result.error = error;
 }
 
 inline ForceCommand parse_force_ctrl(const std::string& cmd)
@@ -305,46 +320,62 @@ inline ForceCommand parse_force_ctrl(const std::string& cmd)
     result.kind = ForceCommandKind::STOP;
   } else if (token == "target") {
     result.kind = ForceCommandKind::SET_TARGET;
-    iss >> result.target_N;  // 기존 동작 유지: 실패하면 0N
+    if (!(iss >> result.target_N) || !std::isfinite(result.target_N)) {
+      invalidate_force_command(result, "잘못된 target 명령");
+    }
   } else if (token == "direction") {
     result.kind = ForceCommandKind::SET_DIRECTION;
-    iss >> result.direction;  // 기존 동작 유지: 실패하면 +1
+    if (!(iss >> result.direction)) {
+      invalidate_force_command(result, "잘못된 direction 명령");
+    }
   } else if (token == "feedback") {
     result.kind = ForceCommandKind::SET_FEEDBACK;
-    iss >> result.feedback_label;
-    result.feedback_mode = parse_feedback_mode(result.feedback_label);
+    if (!(iss >> result.feedback_label) || !is_valid_feedback_mode(result.feedback_label)) {
+      invalidate_force_command(result, "잘못된 feedback 명령");
+    } else {
+      result.feedback_mode = parse_feedback_mode(result.feedback_label);
+    }
   } else if (token == "force_abs" || token == "abs_force" || token == "tension_abs") {
     result.kind = ForceCommandKind::SET_FORCE_ABS;
-    iss >> result.enabled;  // 기존 동작 유지: 실패하면 ON
+    if (!(iss >> result.enabled)) {
+      invalidate_force_command(result, "잘못된 force_abs 명령");
+    }
   } else if (token == "pid") {
     result.kind = ForceCommandKind::SET_PID;
-    iss >> result.kp >> result.ki >> result.kd;  // 실패한 값은 기본값 유지
+    if (!(iss >> result.kp >> result.ki >> result.kd) ||
+        !std::isfinite(result.kp) || !std::isfinite(result.ki) || !std::isfinite(result.kd)) {
+      invalidate_force_command(result, "잘못된 PID 명령");
+    }
   } else if (token == "tanh") {
     result.kind = ForceCommandKind::SET_TANH;
     if (!(iss >> result.tanh_sens_N >> result.tanh_dead_N) ||
         !std::isfinite(result.tanh_sens_N) || !std::isfinite(result.tanh_dead_N)) {
-      result.kind = ForceCommandKind::INVALID;
-      result.error = "잘못된 tanh 명령";
+      invalidate_force_command(result, "잘못된 tanh 명령");
     }
   } else if (token == "tare_offset") {
     result.kind = ForceCommandKind::SET_TARE_OFFSET;
     if (!(iss >> result.tare_channel >> result.tare_offset_N) ||
         (result.tare_channel != 0 && result.tare_channel != 1) ||
         !std::isfinite(result.tare_offset_N)) {
-      result.kind = ForceCommandKind::INVALID;
-      result.error = "잘못된 tare_offset 명령";
+      invalidate_force_command(result, "잘못된 tare_offset 명령");
     }
   } else if (token == "tare_reset") {
     result.kind = ForceCommandKind::TARE_RESET;
   } else if (token == "maxrpm") {
     result.kind = ForceCommandKind::SET_MAX_RPM;
-    iss >> result.max_rpm;  // 기존 동작 유지: 실패하면 100rpm
+    if (!(iss >> result.max_rpm)) {
+      invalidate_force_command(result, "잘못된 maxrpm 명령");
+    }
   } else if (token == "limit") {
     result.kind = ForceCommandKind::SET_LIMIT;
-    iss >> result.limit_N;  // 기존 동작 유지: 실패하면 0N
+    if (!(iss >> result.limit_N) || !std::isfinite(result.limit_N)) {
+      invalidate_force_command(result, "잘못된 limit 명령");
+    }
   } else if (token == "alpha") {
     result.kind = ForceCommandKind::SET_ALPHA;
-    iss >> result.alpha;  // 기존 동작 유지: 실패하면 0.3
+    if (!(iss >> result.alpha) || !std::isfinite(result.alpha)) {
+      invalidate_force_command(result, "잘못된 alpha 명령");
+    }
   } else if (token == "waveform") {
     result.kind = ForceCommandKind::SET_WAVEFORM;
     std::getline(iss >> std::ws, result.waveform_payload);

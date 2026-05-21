@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from .config import DEFAULT_RT_CPU
+from .config import DEFAULT_RT_CPU, WORKSPACE_DIR, WS_SETUP
 from .motor_process import build_motor_cmd
 from .time_utils import now_str
 from .topics import EPOS_NODE_EXECUTABLE
@@ -29,17 +29,27 @@ class NodeRunner(QThread):
     def _looks_like_node_process(cmdline: str) -> bool:
         """명령행이 EPOS 모터 노드 실행 프로세스인지 보수적으로 판별."""
         padded = f" {cmdline} "
-        return (
+        has_node_name = (
             f" {EPOS_NODE_EXECUTABLE} " in padded
             or f"/{EPOS_NODE_EXECUTABLE} " in padded
             or padded.rstrip().endswith(f"/{EPOS_NODE_EXECUTABLE}")
         )
+        if not has_node_name:
+            return False
+
+        workspace_markers = (
+            str(WORKSPACE_DIR),
+            str(WS_SETUP),
+            f"EPOS_WORKSPACE_DIR={WORKSPACE_DIR}",
+        )
+        return any(marker and marker in cmdline for marker in workspace_markers)
 
     @classmethod
     def _existing_node_pids(cls) -> List[int]:
         """현재 PC에 남아 있는 EPOS 모터 노드 후보 PID 목록."""
+        uid_filter = ",".join(sorted({str(os.geteuid()), "0"}))
         result = subprocess.run(
-            ["pgrep", "-af", EPOS_NODE_EXECUTABLE],
+            ["pgrep", "-u", uid_filter, "-af", EPOS_NODE_EXECUTABLE],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,

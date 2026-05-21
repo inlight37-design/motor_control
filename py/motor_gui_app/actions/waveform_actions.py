@@ -24,7 +24,7 @@ def start_waveform(window):
         freq_end_hz=float(widgets.freq_end_spin.value()) if wf_type == "chirp" else 0.0,
         duration_s=float(widgets.duration_spin.value()) if wf_type == "chirp" else 0.0,
     )
-    cmd_text = window.control.start_waveform(settings)
+    cmd_text = window.session.control.start_waveform(settings)
 
     window.waveform_running = True
     widgets.start_button.setEnabled(False)
@@ -37,7 +37,7 @@ def start_waveform(window):
 def stop_waveform(window):
     """C++ 파형 생성기를 정지하고 수동 모드 UI로 되돌린다."""
     widgets = window.waveform_widgets
-    window.control.stop_waveform()
+    window.session.control.stop_waveform()
     window.waveform_running = False
     widgets.start_button.setEnabled(True)
     widgets.stop_button.setEnabled(False)

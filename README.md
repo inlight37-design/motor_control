@@ -14,6 +14,8 @@
     - `core/feedback_state.py`: 모터, RT 진단, 로드셀, 리니어 엔코더 최신 피드백 값 컨테이너.
     - `core/load_cell_calibration.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 캘리브레이션 JSON 해석.
     - `core/linear_encoder_math.py`: GUI 내장 리니어 엔코더 리더와 ROS2 노드가 공유하는 count/mm 변환.
+    - `core/iir_filter.py`: GUI 내장 로드셀 리더와 ROS2 로드셀 노드가 공유하는 1차 IIR 필터.
+    - `core/motor_units.py`: 위치 tick/mm 변환처럼 모터 단위 계산을 공유하는 유틸.
     - `core/control_client.py`: GUI/CLI가 공유하는 고수준 제어 API.
     - `core/session/`: 제어 API, 상태 조회, 실행 플래그를 묶는 세션 모델.
     - `core/ros_environment.py`: ROS2/DDS 환경 설정과 EtherCAT 인터페이스 감지.
@@ -152,9 +154,15 @@ flowchart TB
 - `devices/`는 GUI 프로세스 안에서 Phidget 장치를 직접 읽을 때 사용합니다.
 - `nodes/`는 GUI 없이 센서만 ROS2 토픽으로 퍼블리시할 때 사용합니다.
 
-지금 구조는 일부러 “완전한 플러그인 시스템”까지는 가지 않았습니다. 로드셀 캘리브레이션과 리니어 엔코더 count/mm 변환처럼 GUI 리더와 독립 노드가 같이 쓰는 계산만 `core/`로 빼고, 장치 연결 자체는 `devices/`와 `nodes/`에 남겼습니다. 그래서 새 모터나 센서를 추가할 때 공통 계산/토픽/상태 저장 위치는 명확하지만, 작은 파일이 불필요하게 더 쪼개지는 부담은 줄였습니다.
+지금 구조는 일부러 “완전한 플러그인 시스템”까지는 가지 않았습니다. 로드셀 캘리브레이션/IIR 필터, 리니어 엔코더 count/mm 변환, 모터 tick/mm 변환처럼 GUI 리더와 독립 노드 또는 UI 로직이 같이 쓰는 계산만 `core/`로 빼고, 장치 연결 자체는 `devices/`와 `nodes/`에 남겼습니다. 그래서 새 모터나 센서를 추가할 때 공통 계산/토픽/상태 저장 위치는 명확하지만, 작은 파일이 불필요하게 더 쪼개지는 부담은 줄였습니다.
 
-호환을 위해 `window.commander`, `window.monitor`, `window.lc_reader` 같은 기존 이름은 아직 alias로 남아 있습니다. 새 코드는 가능하면 `window.runtime_threads`, `window.device_readers`, `window.session`을 우선 보면 되고, 기존 actions가 모두 옮겨진 뒤 alias를 줄이면 됩니다.
+클로드 코드 리뷰 후 `window.commander`, `window.monitor`, `window.control`, `window.lc_reader`, `window.linear_encoder` 같은 GUI alias는 제거했습니다. 런타임 객체는 `window.runtime_threads`, 센서 리더는 `window.device_readers`, 제어 API와 상태 조회는 `window.session`을 보면 됩니다. `window.motor_running` 같은 실행 플래그 property는 기존 UI 코드 호환을 위해 `session.flags`로 연결되어 있습니다.
+
+`CommandThread`의 200 Hz 루프는 heartbeat, 센서 피드백 발행, 명령 큐 처리, 수동/스크립트 목표 계산, 소프트 리미트 적용이 메서드 단위로 나뉘어 있습니다. 새 센서 발행을 추가할 때는 `commander.py`의 `_publish_*_feedback()` 계열, 새 명령 경로는 `_drain_command_queues()` 쪽을 먼저 보면 됩니다.
+
+로드셀 힘 한계는 두 단계로 적용됩니다. Python `CommandThread`는 설정한 한계의 soft-start 지점부터 RPM 명령을 서서히 줄이고, C++ RT 루프는 같은 한계를 hard stop 조건으로 다시 확인합니다. 즉 Python은 부드러운 감속, C++는 마지막 안전 정지를 맡습니다.
+
+GUI 내장 센서 리더와 독립 센서 노드는 같은 ROS2 토픽을 사용할 수 있습니다. 같은 토픽에 publisher가 둘 이상 감지되면 GUI 로그에 경고를 띄우지만, 실험 데이터가 섞이지 않게 실제 운용에서는 둘 중 하나만 켜는 편이 좋습니다.
 
 ## 설정 파일과 설정 로더
 

@@ -28,17 +28,17 @@ def load_lc_cal(window):
     if not fname:
         return
 
-    err = window.lc_reader.load_calibration(fname)
+    err = window.device_readers.load_cell.load_calibration(fname)
     if err:
         QMessageBox.critical(window, "캘파일 오류", err)
         return
 
     widgets = window.load_cell_widgets
-    widgets.cal_label.setText(f"Cal: {os.path.basename(fname)} ({window.lc_reader.cal_note})")
-    widgets.cal_label.setToolTip(window.lc_reader.cal_note)
+    widgets.cal_label.setText(f"Cal: {os.path.basename(fname)} ({window.device_readers.load_cell.cal_note})")
+    widgets.cal_label.setToolTip(window.device_readers.load_cell.cal_note)
     widgets.cal_label.setStyleSheet("color: #44bb44; font-size: 10px;")
     window.update_log(
-        f"[{now_str()}] 로드셀 캘파일 로드: {os.path.basename(fname)} / {window.lc_reader.cal_note}"
+        f"[{now_str()}] 로드셀 캘파일 로드: {os.path.basename(fname)} / {window.device_readers.load_cell.cal_note}"
     )
 
 
@@ -53,17 +53,17 @@ def load_lc_cal_channel(window, ch: int):
     if not fname:
         return
 
-    err = window.lc_reader.load_calibration_channel(fname, ch)
+    err = window.device_readers.load_cell.load_calibration_channel(fname, ch)
     if err:
         QMessageBox.critical(window, f"CH{ch} 캘파일 오류", err)
         return
 
     widgets = window.load_cell_widgets
-    widgets.cal_label.setText(f"Cal: {window.lc_reader.cal_note}")
-    widgets.cal_label.setToolTip(window.lc_reader.cal_note)
+    widgets.cal_label.setText(f"Cal: {window.device_readers.load_cell.cal_note}")
+    widgets.cal_label.setToolTip(window.device_readers.load_cell.cal_note)
     widgets.cal_label.setStyleSheet("color: #44bb44; font-size: 10px;")
     window.update_log(
-        f"[{now_str()}] 로드셀 CH{ch} 캘파일 로드: {os.path.basename(fname)} / {window.lc_reader.cal_note}"
+        f"[{now_str()}] 로드셀 CH{ch} 캘파일 로드: {os.path.basename(fname)} / {window.device_readers.load_cell.cal_note}"
     )
 
 
@@ -77,8 +77,8 @@ def tare_lc(window, ch: int):
     button = widgets.tare_ch0_button if ch == 0 else widgets.tare_ch1_button
     set_lc_tare_status(window, f"CH{ch} 클릭됨", "#ffd54f")
 
-    if any(window.lc_reader.connected):
-        ok, msg = window.lc_reader.tare(ch)
+    if any(window.device_readers.load_cell.connected):
+        ok, msg = window.device_readers.load_cell.tare(ch)
         if ok:
             set_ext_tare_offset(window, ch, 0.0)
     elif window.session.state.load_cell_fresh():
@@ -107,8 +107,8 @@ def tare_lc_all(window):
     set_lc_tare_status(window, "전체 클릭됨", "#ffd54f")
 
     results = []
-    if any(window.lc_reader.connected):
-        results = window.lc_reader.tare_all()
+    if any(window.device_readers.load_cell.connected):
+        results = window.device_readers.load_cell.tare_all()
         for ch, (ok, _) in enumerate(results):
             if ok:
                 set_ext_tare_offset(window, ch, 0.0)
@@ -139,9 +139,9 @@ def tare_lc_all(window):
 def reset_lc_tare(window):
     """모든 로드셀 Tare를 해제한다."""
     flash_lc_button(window, window.load_cell_widgets.tare_reset_button, "해제됨", ok=True)
-    window.lc_reader.reset_tare()
+    window.device_readers.load_cell.reset_tare()
     window.ui_state.ext_tare_n = [0.0, 0.0]
-    window.control.reset_force_tare_offsets()
+    window.session.control.reset_force_tare_offsets()
     set_lc_tare_status(window, "Tare 해제", "#90caf9")
     window.update_log(f"[{now_str()}] 로드셀 Tare 해제")
     window.flush_log_buffer()
@@ -150,12 +150,12 @@ def reset_lc_tare(window):
 def set_ext_tare_offset(window, ch: int, offset_N: float):
     """외부 토픽 Tare 오프셋을 GUI와 C++ 힘 제어 노드에 함께 반영한다."""
     window.ui_state.ext_tare_n[ch] = float(offset_N)
-    window.control.set_force_tare_offset(ch, offset_N)
+    window.session.control.set_force_tare_offset(ch, offset_N)
 
 
 def sync_force_tare_offsets(window):
     """힘 제어 시작 전 현재 GUI Tare 오프셋을 C++ 노드와 동기화한다."""
-    window.control.sync_force_tare_offsets(window.ui_state.ext_tare_n)
+    window.session.control.sync_force_tare_offsets(window.ui_state.ext_tare_n)
 
 
 def set_lc_tare_status(window, text: str, color: str):
@@ -213,8 +213,8 @@ def _set_lc_tare_buttons(
 
 def toggle_lc_connect(window):
     """로드셀 연결/해제 토글. 연결은 별도 스레드에서 수행한다."""
-    if any(window.lc_reader.connected):
-        window.lc_reader.disconnect()
+    if any(window.device_readers.load_cell.connected):
+        window.device_readers.load_cell.disconnect()
         _set_lc_connect_button(window, connected=False)
         _set_lc_tare_buttons(window)
         window.update_log(f"[{now_str()}] 로드셀 연결 해제")
@@ -223,7 +223,7 @@ def toggle_lc_connect(window):
     _set_lc_connect_button(window, connected=False, text="연결 중...", enabled=False)
 
     def try_connect():
-        channels = window.lc_reader.connect()
+        channels = window.device_readers.load_cell.connect()
         window.lc_connect_result_signal.emit(channels)
 
     threading.Thread(target=try_connect, daemon=True).start()
@@ -235,9 +235,9 @@ def on_lc_connect_result(window, channels: list):
         _set_lc_connect_button(window, connected=True)
         _set_lc_tare_buttons(window, ch0=0 in channels, ch1=1 in channels, all_channels=True, reset=True)
         window.update_log(f"[{now_str()}] 로드셀 연결됨 CH{channels}")
-        missing = [i for i in range(window.lc_reader.n_channels) if i not in channels]
+        missing = [i for i in range(window.device_readers.load_cell.n_channels) if i not in channels]
         for i in missing:
-            detail = window.lc_reader.last_errors[i] or "알 수 없는 오류"
+            detail = window.device_readers.load_cell.last_errors[i] or "알 수 없는 오류"
             window.update_log(f"[{now_str()}] 로드셀 CH{i} 미연결: {detail}")
         return
 
@@ -245,7 +245,7 @@ def on_lc_connect_result(window, channels: list):
     _set_lc_tare_buttons(window)
     msg = "Phidget22 라이브러리 없음" if not PHIDGET_AVAILABLE else "Phidget 연결 실패 (USB 확인)"
     window.update_log(f"[{now_str()}] 로드셀 연결 실패: {msg}")
-    for i, detail in enumerate(window.lc_reader.last_errors):
+    for i, detail in enumerate(window.device_readers.load_cell.last_errors):
         if detail:
             window.update_log(f"[{now_str()}] 로드셀 CH{i} 실패: {detail}")
 
@@ -287,7 +287,7 @@ def update_soft_limit(window):
     factor, _, _ = lc_unit_factor(window)
     limit_N = widgets.force_limit_spin.value() / factor
     enabled = widgets.soft_limit_checkbox.isChecked()
-    window.control.set_force_limit(enabled, max(0.1, limit_N), widgets.soft_start_spin.value())
+    window.session.control.set_force_limit(enabled, max(0.1, limit_N), widgets.soft_start_spin.value())
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -298,7 +298,7 @@ def sync_force_abs_mode(window, log: bool = True):
     """장력 크기(|F|) 표시/제어 모드를 C++ 힘 제어 루프에 전달한다."""
     enabled = bool(window.load_cell_widgets.force_abs_checkbox.isChecked())
     window.ui_state.force_abs_mode = enabled
-    window.control.set_force_absolute_mode(enabled)
+    window.session.control.set_force_absolute_mode(enabled)
     if log:
         mode = "|F| 장력 크기" if enabled else "signed 힘"
         window.update_log(f"[{now_str()}] 힘 표시/제어 모드: {mode}")

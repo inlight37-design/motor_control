@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """수동 속도/위치/토크 제어와 비상정지 동작 헬퍼."""
 from ..core.config import DEFAULT_POSITION_LEAD_MM_REV, DEFAULT_POSITION_TICKS_PER_REV
+from ..core import motor_units
 from ..core.time_utils import now_str
 from . import force_control_actions, hysteresis_actions, waveform_actions
 
@@ -9,31 +10,31 @@ def change_op_mode(window, index: int):
     """운전 모드 콤보박스 변경 시 C++ 노드에 모드 전환 명령을 보낸다."""
     modes = [9, 8, 10]  # 0: 속도(CSV), 1: 위치(CSP), 2: 토크(CST)
     mode = modes[index]
-    window.control.set_operation_mode(mode)
+    window.session.control.set_operation_mode(mode)
     window.update_log(f"[{now_str()}] 제어 모드 변경 요청: {mode}")
 
 
 def pos_lead_mm_rev(window) -> float:
     widgets = getattr(window, "position_torque_widgets", None)
     if widgets is not None:
-        return max(float(widgets.pos_lead_spin.value()), 1e-9)
-    return max(float(DEFAULT_POSITION_LEAD_MM_REV), 1e-9)
+        return motor_units.normalize_lead_mm_rev(widgets.pos_lead_spin.value())
+    return motor_units.normalize_lead_mm_rev(DEFAULT_POSITION_LEAD_MM_REV)
 
 
 def pos_ticks_per_rev(_window) -> float:
-    return max(float(DEFAULT_POSITION_TICKS_PER_REV), 1.0)
+    return motor_units.normalize_ticks_per_rev(DEFAULT_POSITION_TICKS_PER_REV)
 
 
 def pos_ticks_per_mm(window) -> float:
-    return pos_ticks_per_rev(window) / pos_lead_mm_rev(window)
+    return motor_units.ticks_per_mm(pos_ticks_per_rev(window), pos_lead_mm_rev(window))
 
 
 def pos_ticks_to_mm(window, ticks: int | float) -> float:
-    return float(ticks) / pos_ticks_per_mm(window)
+    return motor_units.ticks_to_mm(ticks, pos_ticks_per_rev(window), pos_lead_mm_rev(window))
 
 
 def pos_mm_to_ticks(window, mm: int | float) -> int:
-    return int(round(float(mm) * pos_ticks_per_mm(window)))
+    return motor_units.mm_to_ticks(mm, pos_ticks_per_rev(window), pos_lead_mm_rev(window))
 
 
 def sync_pos_mm_from_ticks(window):
@@ -82,7 +83,7 @@ def send_manual_pos(window):
     pos = widgets.pos_spin.value()
     pos_mm = pos_ticks_to_mm(window, pos)
     real_target = pos + window.ui_state.pos_offset
-    window.control.move_to_position_ticks(real_target, speed_ticks_per_s=tps)
+    window.session.control.move_to_position_ticks(real_target, speed_ticks_per_s=tps)
     speed_mm_s = float(tps) / pos_ticks_per_mm(window)
     window.update_log(
         f"[{now_str()}] 위치 명령: 표시={pos} tick ({pos_mm:.3f} mm) / "
@@ -93,14 +94,14 @@ def send_manual_pos(window):
 def send_manual_trq(window):
     """수동 토크 명령을 전송."""
     trq = window.position_torque_widgets.trq_spin.value()
-    window.control.set_manual_torque(trq)
+    window.session.control.set_manual_torque(trq)
     window.update_log(f"[{now_str()}] 수동 토크 명령: {trq * 0.101:.1f} mN·m ({trq} ‰)")
 
 
 def send_manual_rpm(window):
     """수동 RPM 명령을 전송."""
     rpm = float(window.manual_motion_widgets.rpm_spin.value())
-    window.control.set_manual_rpm(rpm)
+    window.session.control.set_manual_rpm(rpm)
     window.update_log(f"[{now_str()}] 수동 RPM: {rpm:.0f}")
 
 
@@ -109,7 +110,7 @@ def emergency_stop(window):
     if window.hyst_test_running:
         hysteresis_actions.abort_test(window, reason="비상 정지")
 
-    window.control.emergency_stop(hold_position_ticks=window.session.state.actual_position_ticks())
+    window.session.control.emergency_stop(hold_position_ticks=window.session.state.actual_position_ticks())
     window.manual_motion_widgets.rpm_spin.setValue(0)
     widgets = window.position_torque_widgets
     widgets.trq_spin.setValue(0)

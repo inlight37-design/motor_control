@@ -2,9 +2,8 @@
 """ROS2/DDS 실행 환경과 EtherCAT 인터페이스 감지."""
 import glob
 import os
-import shlex
-import subprocess
 import sys
+from pathlib import Path
 from typing import List
 
 from .config import DDS_CONFIG_PATH
@@ -29,18 +28,8 @@ def detect_interfaces() -> List[str]:
     return result
 
 
-def _sudo_shell(cmd: str) -> subprocess.CompletedProcess:
-    """sudo 권한으로 셸 명령을 실행하는 헬퍼."""
-    full = f"sudo bash -lc {shlex.quote(cmd)}"
-    return subprocess.run(full, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-
 def ensure_fastdds_udp_only_profile() -> None:
     """FastDDS가 UDP만 사용하도록 강제하는 XML 프로파일을 생성."""
-    try:
-        _sudo_shell(f"rm -f {shlex.quote(DDS_CONFIG_PATH)}")
-    except Exception:
-        pass
     xml = """<?xml version="1.0" encoding="UTF-8" ?>
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <transport_descriptors>
@@ -57,10 +46,16 @@ def ensure_fastdds_udp_only_profile() -> None:
   </participant>
 </profiles>
 """
+    path = Path(DDS_CONFIG_PATH)
     try:
-        with open(DDS_CONFIG_PATH, "w", encoding="utf-8") as f:
+        path.unlink(missing_ok=True)
+    except Exception:
+        path = Path("/tmp") / f"fastdds_udp_only_{os.getuid()}_{path.name}"
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
             f.write(xml)
-        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = DDS_CONFIG_PATH
+        os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(path)
     except Exception as exc:
         print(f"[WARN] DDS 설정 실패: {exc}", file=sys.stderr)
 

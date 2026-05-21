@@ -83,23 +83,18 @@ def _init_runtime_threads(window, default_iface: str):
         monitor=monitor,
         control=control,
     )
-    # 기존 actions/panels가 직접 참조하던 이름은 alias로 유지한다.
-    # 새 코드는 runtime_threads를 우선 사용하면 런타임 의존성을 한곳에서 볼 수 있다.
-    window.node_runner = node_runner
-    window.commander = commander
-    window.control = control
-    window.monitor = monitor
 
 
 def _init_session(window):
     """GUI/CLI 공용 세션 컨테이너와 실험 실행기를 연결한다."""
+    runtime = window.runtime_threads
     window.session = MotorSession(
-        control=window.control,
-        state=StateView(window.monitor),
+        control=runtime.control,
+        state=StateView(runtime.monitor),
         flags=SessionFlags(),
     )
     window.session.hysteresis = HysteresisExperiment(
-        window.control,
+        runtime.control,
         window.session.flags,
         scheduler=lambda delay_ms, callback: QTimer.singleShot(int(delay_ms), callback),
         preconditions=HysteresisPreconditions(require_motor_running=True),
@@ -118,12 +113,8 @@ def _init_devices(window):
         load_cell=load_cell,
         linear_encoder=linear_encoder,
     )
-    # 기존 actions가 쓰는 센서 이름은 alias로 유지한다.
-    # 새 센서는 DeviceReaders에 추가한 뒤 필요한 alias만 단계적으로 둔다.
-    window.lc_reader = load_cell
-    window.linear_encoder = linear_encoder
-    window.commander.set_force_reader(load_cell)
-    window.commander.set_linear_encoder_reader(linear_encoder)
+    window.runtime_threads.commander.set_force_reader(load_cell)
+    window.runtime_threads.commander.set_linear_encoder_reader(linear_encoder)
 
 
 def connect_runtime_signals(window):
@@ -136,30 +127,33 @@ def connect_runtime_signals(window):
 
 def _connect_thread_signals(window):
     """NodeRunner/Commander/Monitor에서 올라오는 signal을 연결."""
-    window.node_runner.log_signal.connect(window.update_log)
-    window.node_runner.state_signal.connect(lambda running: system_actions.on_motor_state(window, running))
-    window.commander.log_signal.connect(window.update_log)
-    window.commander.script_error_signal.connect(lambda msg: script_actions.on_script_error(window, msg))
-    window.monitor.log_signal.connect(window.update_log)
-    window.monitor.fault_signal.connect(lambda is_fault: system_actions.on_fault_state(window, is_fault))
-    window.monitor.resend_targets_signal.connect(lambda: system_actions.resend_after_fault(window))
+    runtime = window.runtime_threads
+    runtime.node_runner.log_signal.connect(window.update_log)
+    runtime.node_runner.state_signal.connect(lambda running: system_actions.on_motor_state(window, running))
+    runtime.commander.log_signal.connect(window.update_log)
+    runtime.commander.script_error_signal.connect(lambda msg: script_actions.on_script_error(window, msg))
+    runtime.monitor.log_signal.connect(window.update_log)
+    runtime.monitor.fault_signal.connect(lambda is_fault: system_actions.on_fault_state(window, is_fault))
+    runtime.monitor.resend_targets_signal.connect(lambda: system_actions.resend_after_fault(window))
 
 
 def _connect_top_status_signals(window):
     """상단 상태/진단 위젯과 런타임 객체를 연결."""
     top_status = window.top_status_widgets
-    top_status.iface_combo.currentTextChanged.connect(window.node_runner.set_iface)
-    top_status.fault_reset_button.clicked.connect(lambda _checked=False: window.monitor.request_fault_reset())
-    top_status.auto_reset_checkbox.toggled.connect(window.monitor.set_auto_fault_reset)
-    window.monitor.set_auto_fault_reset(top_status.auto_reset_checkbox.isChecked())
+    runtime = window.runtime_threads
+    top_status.iface_combo.currentTextChanged.connect(runtime.node_runner.set_iface)
+    top_status.fault_reset_button.clicked.connect(lambda _checked=False: runtime.monitor.request_fault_reset())
+    top_status.auto_reset_checkbox.toggled.connect(runtime.monitor.set_auto_fault_reset)
+    runtime.monitor.set_auto_fault_reset(top_status.auto_reset_checkbox.isChecked())
 
 
 def _connect_command_setting_signals(window):
     """명령 주기 중 즉시 반영되는 설정 위젯을 연결."""
     manual_motion = window.manual_motion_widgets
-    manual_motion.accel_spin.valueChanged.connect(lambda v: window.control.set_accel_limit(float(v)))
-    manual_motion.limit_spin.valueChanged.connect(lambda v: window.control.set_rpm_limit(float(v)))
-    window.script_log_widgets.script_hz_spin.valueChanged.connect(lambda v: window.control.set_script_update_hz(int(v)))
+    control = window.session.control
+    manual_motion.accel_spin.valueChanged.connect(lambda v: control.set_accel_limit(float(v)))
+    manual_motion.limit_spin.valueChanged.connect(lambda v: control.set_rpm_limit(float(v)))
+    window.script_log_widgets.script_hz_spin.valueChanged.connect(lambda v: control.set_script_update_hz(int(v)))
 
 
 def _connect_panel_visibility_signals(window):
@@ -179,8 +173,8 @@ def start_runtime_loops(window):
     window.log_buffer.timer.timeout.connect(window.flush_log_buffer)
     window.log_buffer.timer.start(100)
 
-    window.commander.start()
-    window.monitor.start()
+    window.runtime_threads.commander.start()
+    window.runtime_threads.monitor.start()
 
 
 def init_state_flags(window):

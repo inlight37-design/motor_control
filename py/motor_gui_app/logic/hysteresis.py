@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import math
 
+from ..core import motor_units
+
 
 EPS_FREQ = 1.0e-9
 EPS_LEAD = 1.0e-9
@@ -100,8 +102,7 @@ def amplitude_to_position_ticks(
         freq = max(float(freq_hz), EPS_FREQ)
         amp_rev = (vel.amp_rpm / 60.0) / (2.0 * math.pi * freq)
         amp_mm = amp_rev * vel.lead_mm_rev
-    ticks_per_mm = float(ticks_per_rev) / max(vel.lead_mm_rev, EPS_LEAD)
-    amp_ticks = amp_mm * ticks_per_mm
+    amp_ticks = amp_mm * motor_units.ticks_per_mm(ticks_per_rev, vel.lead_mm_rev)
     return PositionAmplitude(
         amp_ticks=amp_ticks,
         amp_mm=amp_mm,

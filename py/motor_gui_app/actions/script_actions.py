@@ -50,14 +50,14 @@ def toggle_script(window):
         window.manual_motion_widgets.rpm_spin.setEnabled(False)
         window.waveform_widgets.start_button.setEnabled(False)
         window.script_log_widgets.script_button.setText("스크립트 중지")
-        window.control.start_motion_script(script)
+        window.session.control.start_motion_script(script)
         return
 
     window.script_running = False
     window.manual_motion_widgets.rpm_spin.setEnabled(True)
     window.waveform_widgets.start_button.setEnabled(True)
     window.script_log_widgets.script_button.setText("스크립트 시작")
-    window.control.stop_motion_script()
+    window.session.control.stop_motion_script()
 
 
 def on_script_error(window, msg: str):

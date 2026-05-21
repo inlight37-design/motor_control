@@ -4,36 +4,13 @@ import os
 import threading
 
 from ..core.config import DEFAULT_LOAD_CELL_CHANGE_TRIGGER, DEFAULT_LOAD_CELL_DATA_RATE_HZ
+from ..core.iir_filter import IIRFilter as _IIRFilter
 from ..core.load_cell_calibration import (
     calibration_to_grams,
     load_calibration_channels,
     select_channel_calibration,
 )
 from ..core.phidget_support import GRAVITY, PHIDGET_AVAILABLE, VoltageRatioInput
-
-class _IIRFilter:
-    """1차 IIR 저역통과 필터 — 로드셀 노이즈 제거용.
-
-    y[n] = alpha * x[n] + (1 - alpha) * y[n-1]
-    alpha가 작을수록 부드럽지만 반응이 느려진다. (0.1 = 새 값의 10%만 반영)
-    """
-    def __init__(self, alpha: float = 0.1):
-        self.alpha = alpha
-        self._prev = None  # 이전 필터 출력값
-
-    def process(self, value: float) -> float:
-        """새 샘플을 필터링하여 반환. 첫 번째 호출 시에는 입력값을 그대로 반환."""
-        if self._prev is None:
-            self._prev = value
-            return value
-        out = self.alpha * value + (1.0 - self.alpha) * self._prev
-        self._prev = out
-        return out
-
-    def reset(self):
-        """필터 상태 초기화 — 캘리브레이션 변경 시 호출하여 과도 응답을 제거."""
-        self._prev = None
-
 
 # ══════════════════════════════════════════════════════════════════════
 # LoadCellReader 클래스 — Phidget 로드셀 GUI 내장형 리더

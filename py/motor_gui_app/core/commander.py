@@ -6,11 +6,6 @@ import time
 from collections import deque
 from typing import Optional
 
-from .ros_bootstrap import prepare_ros_environment
-
-# rclpy import 전에 DDS 설정이 끝나야 한다.
-prepare_ros_environment()
-
 import rclpy
 from PyQt5.QtCore import QThread, pyqtSignal
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -88,6 +83,7 @@ class CommandThread(QThread):
         self._force_limit_N      = float(DEFAULT_FORCE_SOFT_LIMIT_N)    # 힘 한계값 (N) — 이 값에서 속도 0
         self._soft_start_pct     = float(DEFAULT_FORCE_SOFT_START_PCT)  # 한계의 몇 %에서 감속 시작
         self._soft_limit_tripped = False    # 한계 초과 로그 중복 방지
+        self._external_publisher_warnings = set()  # GUI 내장 센서와 독립 노드 동시 발행 경고 중복 방지
 
         # ── ROS2 퍼블리셔 (run()에서 초기화) ──
         self.node = None               # ROS2 노드
@@ -237,6 +233,145 @@ class CommandThread(QThread):
         self._force_ctrl_cmd_queue.append("stop")
         self.log_signal.emit(f"[{now_str()}] 비상정지")
 
+    def _publish_heartbeat_if_due(self, now_t: float, last_hb_t: float, hb_counter: int, interval: float):
+        """Heartbeat를 주기적으로 발행하고 갱신된 타이밍 상태를 반환한다."""
+        if (now_t - last_hb_t) < interval:
+            return last_hb_t, hb_counter
+        self.pub_heartbeat.publish(Int32(data=hb_counter))
+        return now_t, hb_counter + 1
+
+    def _publish_load_cell_feedback(self):
+        """GUI 내장 로드셀 값을 C++ 노드가 구독하는 ROS2 토픽으로 발행한다."""
+        reader = self._lc_reader
+        if reader is None or not any(reader.connected):
+            return False
+        forces_n = reader.get_all_forces_N()
+        if len(forces_n) > 0 and reader.connected[0]:
+            self._warn_if_external_sensor_publisher(TOPIC_LOAD_CELL_CH0_N, "로드셀 CH0")
+            self.pub_load_cell_ch0.publish(Float32(data=float(forces_n[0])))
+        if len(forces_n) > 1 and reader.connected[1]:
+            self._warn_if_external_sensor_publisher(TOPIC_LOAD_CELL_CH1_N, "로드셀 CH1")
+            self.pub_load_cell_ch1.publish(Float32(data=float(forces_n[1])))
+        return True
+
+    def _publish_linear_encoder_feedback(self):
+        """GUI 내장 리니어 엔코더 값을 C++ 노드/로그용 ROS2 토픽으로 발행한다."""
+        reader = self._linear_encoder_reader
+        if reader is None or not reader.connected:
+            return False
+        self._warn_if_external_sensor_publisher(TOPIC_LINEAR_ENCODER_COUNT, "리니어 엔코더 count")
+        self._warn_if_external_sensor_publisher(TOPIC_LINEAR_ENCODER_MM, "리니어 엔코더 mm")
+        self.pub_linear_count.publish(Int32(data=int(reader.get_position_count())))
+        self.pub_linear_mm.publish(Float32(data=float(reader.get_position_mm())))
+        return True
+
+    def _warn_if_external_sensor_publisher(self, topic: str, label: str):
+        """같은 센서 토픽에 GUI 외 발행자가 있으면 한 번만 경고한다."""
+        if self.node is None or topic in self._external_publisher_warnings:
+            return
+        try:
+            publisher_count = int(self.node.count_publishers(topic))
+        except Exception:
+            return
+        if publisher_count <= 1:
+            return
+        self._external_publisher_warnings.add(topic)
+        self.log_signal.emit(
+            f"[{now_str()}] 경고: {label} 토픽({topic})에 publisher가 {publisher_count}개 있습니다. "
+            "GUI 내장 센서 리더와 독립 센서 노드를 동시에 켜면 데이터가 섞일 수 있습니다."
+        )
+
+    def _drain_command_queues(self):
+        """GUI/CLI 스레드가 넣은 비동기 명령 큐를 ROS2 토픽으로 비운다."""
+        while self._waveform_cmd_queue:
+            waveform_cmd = self._waveform_cmd_queue.popleft()
+            if WAVEFORM_MSG_AVAILABLE and WaveformCmd is not None and isinstance(waveform_cmd, WaveformCmd):
+                waveform_msg = waveform_cmd
+            else:
+                waveform_msg = build_waveform_msg(waveform_cmd)
+            if waveform_msg is not None and self.pub_waveform_v2 is not None:
+                self.pub_waveform_v2.publish(waveform_msg)
+            else:
+                self.pub_waveform.publish(String(data=str(waveform_cmd)))
+
+        while self._log_cmd_queue:
+            self.pub_log_cmd.publish(String(data=self._log_cmd_queue.popleft()))
+
+        while self._force_ctrl_cmd_queue:
+            force_cmd = self._force_ctrl_cmd_queue.popleft()
+            if FORCE_CTRL_MSG_AVAILABLE and ForceCtrlCmd is not None and isinstance(force_cmd, ForceCtrlCmd):
+                force_msg = force_cmd
+            else:
+                force_msg = build_force_ctrl_msg(force_cmd)
+            if force_msg is not None and self.pub_force_ctrl_v2 is not None:
+                self.pub_force_ctrl_v2.publish(force_msg)
+            else:
+                self.pub_force_ctrl.publish(String(data=str(force_cmd)))
+
+    def _current_mode(self) -> str:
+        with self._lock:
+            return self._mode
+
+    def _compute_mode_target_rpm(self, now_t: float, mode: str):
+        """현재 수동/스크립트 상태에서 목표 RPM과 소프트 리미트 설정을 계산한다."""
+        with self._lock:
+            rpm_limit = self._rpm_limit
+            manual_target = self._manual_target_rpm
+            script_obj = self._script
+            script_hz = self._script_update_hz
+            script_t0 = self._script_t0
+            soft_enabled = self._soft_limit_enabled
+            force_limit_N = self._force_limit_N
+            soft_start_pct = self._soft_start_pct
+
+            if mode == "script" and script_obj is not None and script_t0 is not None:
+                script_elapsed = now_t - script_t0
+                script_period = 1.0 / float(script_hz)
+                if script_elapsed >= self._next_script_eval_t:
+                    try:
+                        val = float(script_obj.func(script_elapsed, script_obj.state))
+                        self._script_target_rpm = max(-rpm_limit, min(rpm_limit, val))
+                    except Exception as e:
+                        self._script_target_rpm = 0.0
+                        self._mode = "manual"
+                        self._script = None
+                        self.script_error_signal.emit(f"스크립트 오류: {e}")
+                    self._next_script_eval_t = script_elapsed + script_period
+                desired = self._script_target_rpm
+            else:
+                desired = manual_target
+
+        return float(desired), soft_enabled, force_limit_N, soft_start_pct
+
+    def _apply_soft_limit(self, cmd_rpm: float, enabled: bool, limit_N: float, start_pct: float) -> float:
+        """로드셀 기반 소프트 리미트를 적용해 최종 RPM을 줄인다."""
+        reader = self._lc_reader
+        if not enabled or reader is None or not any(reader.connected):
+            return cmd_rpm
+
+        force_abs_N = reader.get_soft_limit_force_N()
+        start_N = limit_N * start_pct / 100.0
+        if force_abs_N >= limit_N:
+            if not self._soft_limit_tripped:
+                self._soft_limit_tripped = True
+                self.log_signal.emit(f"[{now_str()}] 소프트 리미트 STOP: max|F|={force_abs_N:.2f} N")
+            return 0.0
+        if force_abs_N >= start_N:
+            scale = 1.0 - (force_abs_N - start_N) / max(limit_N - start_N, 1e-6)
+            self._soft_limit_tripped = False
+            return cmd_rpm * max(0.0, min(1.0, scale))
+
+        self._soft_limit_tripped = False
+        return cmd_rpm
+
+    def _sleep_until_next_cycle(self, started_t: float, target_dt: float):
+        elapsed = time.perf_counter() - started_t
+        sleep_t = target_dt - elapsed
+        if sleep_t > 0:
+            time.sleep(sleep_t)
+        else:
+            time.sleep(0.0002)  # 최소 대기 (CPU 양보)
+
     # ==========================================================
     # 메인 스레드 루프 — ROS2 퍼블리셔 생성 후 무한 루프 실행
     # ==========================================================
@@ -295,9 +430,6 @@ class CommandThread(QThread):
         self.pub_heartbeat = self.node.create_publisher(Int32, TOPIC_HEARTBEAT, qos_hb)
 
         target_dt = 1.0 / float(self.cmd_hz)  # 루프 목표 주기 (예: 200Hz → 5ms)
-        last_t = time.perf_counter()
-
-        # Heartbeat 관련 변수
         hb_counter = 0              # 단조 증가 카운터 — C++ 노드가 연속성을 검증
         hb_interval = 0.1           # 100ms = 10Hz
         last_hb_t = time.perf_counter()
@@ -309,123 +441,33 @@ class CommandThread(QThread):
         # ── 메인 제어 루프 ──
         while self.running and rclpy.ok():
             t0 = time.perf_counter()
-            dt = t0 - last_t
-            last_t = t0
 
             # ── (1) Heartbeat 발행 (10Hz) ──
             # C++ 노드는 이 heartbeat가 일정 시간 이상 끊기면 모터를 안전 정지시킴
-            if (t0 - last_hb_t) >= hb_interval:
-                hb_msg = Int32()
-                hb_msg.data = hb_counter
-                hb_counter += 1
-                self.pub_heartbeat.publish(hb_msg)
-                last_hb_t = t0
+            last_hb_t, hb_counter = self._publish_heartbeat_if_due(t0, last_hb_t, hb_counter, hb_interval)
 
             # ── (2) 로드셀 힘 값을 ROS2로 발행 (200Hz) ──
             # C++ 노드의 힘 제어 PID 루프가 이 값을 피드백으로 사용
-            if (t0 - last_force_pub_t) >= force_pub_interval and self._lc_reader is not None and any(self._lc_reader.connected):
-                forces_n = self._lc_reader.get_all_forces_N()
-                if len(forces_n) > 0 and self._lc_reader.connected[0]:
-                    self.pub_load_cell_ch0.publish(Float32(data=float(forces_n[0])))
-                if len(forces_n) > 1 and self._lc_reader.connected[1]:
-                    self.pub_load_cell_ch1.publish(Float32(data=float(forces_n[1])))
+            if (t0 - last_force_pub_t) >= force_pub_interval and self._publish_load_cell_feedback():
                 last_force_pub_t = t0
 
             # ── (2b) 리니어 엔코더 값을 ROS2로 발행 (100Hz) ──
-            if (
-                (t0 - last_linear_pub_t) >= linear_pub_interval
-                and self._linear_encoder_reader is not None
-                and self._linear_encoder_reader.connected
-            ):
-                self.pub_linear_count.publish(Int32(data=int(self._linear_encoder_reader.get_position_count())))
-                self.pub_linear_mm.publish(Float32(data=float(self._linear_encoder_reader.get_position_mm())))
+            if (t0 - last_linear_pub_t) >= linear_pub_interval and self._publish_linear_encoder_feedback():
                 last_linear_pub_t = t0
 
             # ── (3) 큐에 쌓인 비동기 명령 처리 ──
             # 파형/로깅/힘제어 명령은 GUI 스레드에서 큐에 넣고, 여기서 꺼내서 발행
-            while self._waveform_cmd_queue:
-                waveform_cmd = self._waveform_cmd_queue.popleft()
-                if WAVEFORM_MSG_AVAILABLE and WaveformCmd is not None and isinstance(waveform_cmd, WaveformCmd):
-                    waveform_msg = waveform_cmd
-                else:
-                    waveform_msg = build_waveform_msg(waveform_cmd)
-                if waveform_msg is not None and self.pub_waveform_v2 is not None:
-                    self.pub_waveform_v2.publish(waveform_msg)
-                else:
-                    self.pub_waveform.publish(String(data=str(waveform_cmd)))
-
-            while self._log_cmd_queue:
-                self.pub_log_cmd.publish(String(data=self._log_cmd_queue.popleft()))
-
-            while self._force_ctrl_cmd_queue:
-                force_cmd = self._force_ctrl_cmd_queue.popleft()
-                if FORCE_CTRL_MSG_AVAILABLE and ForceCtrlCmd is not None and isinstance(force_cmd, ForceCtrlCmd):
-                    force_msg = force_cmd
-                else:
-                    force_msg = build_force_ctrl_msg(force_cmd)
-                if force_msg is not None and self.pub_force_ctrl_v2 is not None:
-                    self.pub_force_ctrl_v2.publish(force_msg)
-                else:
-                    self.pub_force_ctrl.publish(String(data=str(force_cmd)))
-
-            with self._lock: mode = self._mode
+            self._drain_command_queues()
+            mode = self._current_mode()
 
             # ── (4) 파형 모드: C++ 측에서 파형을 생성하므로 Python은 대기만 함 ──
             if mode == "waveform":
-                elapsed = time.perf_counter() - t0
-                sleep_t = target_dt - elapsed
-                time.sleep(max(sleep_t, 0.001))
+                time.sleep(max(target_dt - (time.perf_counter() - t0), 0.001))
                 continue
 
             # ── (5) 수동/스크립트 모드: 목표 RPM 계산 및 발행 ──
-            with self._lock:
-                rpm_limit = self._rpm_limit
-                manual_target = self._manual_target_rpm
-                script_obj = self._script
-                script_hz = self._script_update_hz
-                script_t0 = self._script_t0
-                soft_enabled = self._soft_limit_enabled
-                force_limit_N = self._force_limit_N
-                soft_start_pct = self._soft_start_pct
-
-                if mode == "script" and script_obj is not None and script_t0 is not None:
-                    # 스크립트 모드: 지정된 Hz로 스크립트 함수를 평가
-                    script_elapsed = t0 - script_t0
-                    script_period = 1.0 / float(script_hz)
-                    if script_elapsed >= self._next_script_eval_t:
-                        try:
-                            val = float(script_obj.func(script_elapsed, script_obj.state))
-                            # RPM 제한 적용
-                            val = max(-rpm_limit, min(rpm_limit, val))
-                            self._script_target_rpm = val
-                        except Exception as e:
-                            # 스크립트 오류 시 안전하게 수동 모드로 복귀
-                            self._script_target_rpm = 0.0
-                            self._mode = "manual"
-                            self._script = None
-                            self.script_error_signal.emit(f"스크립트 오류: {e}")
-                        self._next_script_eval_t = script_elapsed + script_period
-                    desired = self._script_target_rpm
-                else:
-                    # 수동 모드: GUI에서 설정한 값 사용
-                    desired = manual_target
-
-                cmd_rpm = float(desired)
-
-            if soft_enabled and self._lc_reader is not None and any(self._lc_reader.connected):
-                force_abs_N = self._lc_reader.get_soft_limit_force_N()
-                start_N = force_limit_N * soft_start_pct / 100.0
-                if force_abs_N >= force_limit_N:
-                    cmd_rpm = 0.0
-                    if not self._soft_limit_tripped:
-                        self._soft_limit_tripped = True
-                        self.log_signal.emit(f"[{now_str()}] 소프트 리미트 STOP: max|F|={force_abs_N:.2f} N")
-                elif force_abs_N >= start_N:
-                    scale = 1.0 - (force_abs_N - start_N) / max(force_limit_N - start_N, 1e-6)
-                    cmd_rpm *= max(0.0, min(1.0, scale))
-                    self._soft_limit_tripped = False
-                else:
-                    self._soft_limit_tripped = False
+            cmd_rpm, soft_enabled, force_limit_N, soft_start_pct = self._compute_mode_target_rpm(t0, mode)
+            cmd_rpm = self._apply_soft_limit(cmd_rpm, soft_enabled, force_limit_N, soft_start_pct)
 
             # 계산된 최종 RPM을 ROS2 토픽으로 발행
             msg = Int32()
@@ -433,10 +475,7 @@ class CommandThread(QThread):
             self.pub.publish(msg)
 
             # 정확한 루프 주기 유지 — 남은 시간만큼 sleep
-            elapsed = time.perf_counter() - t0
-            sleep_t = target_dt - elapsed
-            if sleep_t > 0: time.sleep(sleep_t)
-            else: time.sleep(0.0002)  # 최소 대기 (CPU 양보)
+            self._sleep_until_next_cycle(t0, target_dt)
 
         # ── 스레드 종료 시 ROS2 노드 정리 ──
         try:

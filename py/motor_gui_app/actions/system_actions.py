@@ -43,7 +43,7 @@ def resend_after_fault(window):
 
 def toggle_motor(window):
     """C++ EPOS 노드 프로세스를 시작하거나 종료."""
-    if not window.node_runner.isRunning():
+    if not window.runtime_threads.node_runner.isRunning():
         start_motor(window)
     else:
         stop_motor(window)
@@ -57,11 +57,11 @@ def start_motor(window):
         QMessageBox.warning(window, "오류", "인터페이스를 선택해주세요.")
         return
 
-    window.node_runner.set_iface(iface)
-    window.node_runner.set_rt_cpu(top_status.rt_cpu_spin.value())
+    window.runtime_threads.node_runner.set_iface(iface)
+    window.runtime_threads.node_runner.set_rt_cpu(top_status.rt_cpu_spin.value())
     top_status.iface_combo.setEnabled(False)
     top_status.rt_cpu_spin.setEnabled(False)
-    window.node_runner.start()
+    window.runtime_threads.node_runner.start()
     top_status.motor_button.setText("종료")
     top_status.motor_button.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 8px;")
     top_status.status_label.setText("부팅...")
@@ -74,7 +74,7 @@ def stop_motor(window):
     if window.hyst_test_running:
         hysteresis_actions.abort_test(window, reason="시스템 종료")
 
-    window.node_runner.stop()
+    window.runtime_threads.node_runner.stop()
     top_status.iface_combo.setEnabled(True)
     top_status.rt_cpu_spin.setEnabled(True)
     top_status.motor_button.setText("시스템 시작")
@@ -87,8 +87,8 @@ def stop_motor(window):
     window.manual_motion_widgets.rpm_spin.setValue(0)
     position_torque.pos_spin.setValue(0)
     position_torque.trq_spin.setValue(0)
-    window.control.set_operation_mode(9)
-    window.control.set_manual_rpm(0)
+    window.session.control.set_operation_mode(9)
+    window.session.control.set_manual_rpm(0)
 
 
 def on_motor_state(window, running: bool):
@@ -110,28 +110,28 @@ def on_motor_state(window, running: bool):
 def close_event(window, event):
     """윈도우 닫기 시 로드셀, 리니어 엔코더, 스레드, ROS2를 순서대로 정리."""
     try:
-        window.lc_reader.disconnect()
+        window.device_readers.load_cell.disconnect()
     except Exception:
         pass
     try:
-        window.linear_encoder.disconnect()
+        window.device_readers.linear_encoder.disconnect()
     except Exception:
         pass
     try:
-        window.control.emergency_stop()
+        window.session.control.emergency_stop()
     except Exception:
         pass
     try:
-        if window.node_runner.isRunning():
-            window.node_runner.stop()
+        if window.runtime_threads.node_runner.isRunning():
+            window.runtime_threads.node_runner.stop()
     except Exception:
         pass
     try:
-        window.monitor.stop()
+        window.runtime_threads.monitor.stop()
     except Exception:
         pass
     try:
-        window.commander.stop()
+        window.runtime_threads.commander.stop()
     except Exception:
         pass
     try:

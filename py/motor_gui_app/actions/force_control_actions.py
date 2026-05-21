@@ -22,25 +22,27 @@ def start_force_ctrl(window):
 
     load_cell_actions.sync_force_tare_offsets(window)
     load_cell_actions.sync_force_abs_mode(window, log=False)
+    pid_settings = ForcePidSettings(
+        kp=float(widgets.kp_spin.value()),
+        ki=float(widgets.ki_spin.value()),
+        kd=float(widgets.kd_spin.value()),
+        output_alpha=float(widgets.alpha_spin.value()),
+    )
+    tanh_settings = ForceTanhSettings(
+        sensitivity_n=float(widgets.tanh_sens_spin.value()),
+        deadband_n=float(widgets.tanh_dead_spin.value()),
+        output_alpha=float(widgets.alpha_spin.value()),
+    )
     settings = ForceControlSettings(
         target_n=target_N,
         max_rpm=max_rpm,
         direction=direction,
         feedback=feedback,
         mode=mode,
-        pid=ForcePidSettings(
-            kp=float(widgets.kp_spin.value()),
-            ki=float(widgets.ki_spin.value()),
-            kd=float(widgets.kd_spin.value()),
-            output_alpha=float(widgets.alpha_spin.value()),
-        ),
-        tanh=ForceTanhSettings(
-            sensitivity_n=float(widgets.tanh_sens_spin.value()),
-            deadband_n=float(widgets.tanh_dead_spin.value()),
-            output_alpha=float(widgets.alpha_spin.value()),
-        ),
+        pid=pid_settings if mode != "tanh" else None,
+        tanh=tanh_settings if mode == "tanh" else None,
     )
-    window.control.start_force_control(settings)
+    window.session.control.start_force_control(settings)
     window.force_control_running = True
 
     widgets.start_button.setEnabled(False)
@@ -53,7 +55,7 @@ def start_force_ctrl(window):
 def stop_force_ctrl(window):
     """힘 제어 정지 명령을 전송하고 UI를 비활성 상태로 되돌린다."""
     widgets = window.force_control_widgets
-    window.control.stop_force_control()
+    window.session.control.stop_force_control()
     window.force_control_running = False
     widgets.start_button.setEnabled(True)
     widgets.stop_button.setEnabled(False)
@@ -93,7 +95,7 @@ def sync_force_ctrl_mode_ui(window):
 def apply_force_pid(window):
     """현재 GUI의 PID 게인과 출력 alpha 값을 C++ 노드에 전송."""
     widgets = window.force_control_widgets
-    window.control.apply_force_pid(
+    window.session.control.apply_force_pid(
         ForcePidSettings(
             kp=float(widgets.kp_spin.value()),
             ki=float(widgets.ki_spin.value()),
@@ -108,7 +110,7 @@ def apply_force_pid(window):
 def apply_force_tanh(window):
     """Tanh 비선형 제어 파라미터와 출력 alpha 값을 C++ 노드에 전송."""
     widgets = window.force_control_widgets
-    window.control.apply_force_tanh(
+    window.session.control.apply_force_tanh(
         ForceTanhSettings(
             sensitivity_n=float(widgets.tanh_sens_spin.value()),
             deadband_n=float(widgets.tanh_dead_spin.value()),

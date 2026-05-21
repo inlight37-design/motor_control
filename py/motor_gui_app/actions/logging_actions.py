@@ -14,7 +14,7 @@ def start_logging_to(window, log_path: Path):
     """지정한 경로로 CSV 로깅을 시작하고 기존 로깅 UI 상태를 갱신."""
     widgets = window.script_log_widgets
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    window.control.start_csv_logging(log_path)
+    window.session.control.start_csv_logging(log_path)
     window.manual_csv_logging_active = True
     widgets.log_start_button.setEnabled(False)
     widgets.log_stop_button.setEnabled(True)
@@ -38,7 +38,7 @@ def start_logging(window):
 def stop_logging(window):
     """CSV 로깅 정지 명령을 전송하고 UI 상태를 대기 상태로 되돌린다."""
     widgets = window.script_log_widgets
-    window.control.stop_csv_logging()
+    window.session.control.stop_csv_logging()
     window.manual_csv_logging_active = False
     widgets.log_start_button.setEnabled(True)
     widgets.log_stop_button.setEnabled(False)
