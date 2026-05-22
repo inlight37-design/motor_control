@@ -28,102 +28,100 @@ flowchart TD
 
 ## 2. Python GUI 코드 맵
 
+큰 흐름은 아래 한 장으로 끝납니다. 각 폴더에 어떤 파일이 들어 있는지는 그 아래 표에 따로 정리했습니다.
+
 ```mermaid
-flowchart LR
-    subgraph UI["ui/"]
-        MainWindow["main_window.py<br/>MasterWindow"]
-        RuntimeInit["runtime_init.py<br/>threads/devices/session"]
-        Layout["window_layout.py<br/>패널 조립"]
-        State["window_state.py<br/>화면 상태"]
-        Widgets["widget_groups.py<br/>위젯 묶음 dataclass"]
-        GraphUpdate["graph_update.py<br/>그래프 갱신"]
-        StatusUpdate["status_update.py<br/>상태 표시 갱신"]
-        RuntimeComponents["runtime_components.py<br/>RuntimeThreads/DeviceReaders"]
-        SessionProps["session_properties.py<br/>호환 property"]
+flowchart TB
+    Entry["app/main.py<br/>ui/main_window.MasterWindow"]
+
+    subgraph View["보이는 것"]
+        UIFolder["ui/<br/>윈도우 조립 · 화면 갱신"]
+        Panels["panels/<br/>위젯 생성"]
     end
 
-    subgraph Panels["panels/ 화면 생성"]
-        TopPanel["top_status_panel.py"]
-        MotionPanel["motion_control_panel.py"]
-        ForcePanel["force_control_panel.py"]
-        LoadPanel["load_cell_panel.py"]
-        HystPanel["hysteresis_panel.py"]
-        ScriptPanel["script_logging_panel.py"]
-        GraphPanel["graph_panel.py"]
-        LogPanel["log_viewer_panel.py"]
-        StopPanel["emergency_stop_panel.py"]
-        VisibilityPanel["panel_visibility_bar.py"]
+    subgraph React["사용자 동작"]
+        Actions["actions/<br/>버튼 / 입력 처리"]
     end
 
-    subgraph Actions["actions/ 사용자 동작"]
-        SystemActions["system_actions.py"]
-        MotionActions["motion_actions.py"]
-        ForceActions["force_control_actions.py"]
-        LoadActions["load_cell_actions.py"]
-        LinearActions["linear_encoder_actions.py"]
-        HystActions["hysteresis_actions.py"]
-        WaveActions["waveform_actions.py"]
-        ScriptActions["script_actions.py"]
-        LoggingActions["logging_actions.py"]
+    subgraph Shared["core/ 공용"]
+        APIs["control_client.py<br/>session/ · experiments/<br/>(GUI/CLI 공용 API)"]
+        Threads["commander.py · monitor.py<br/>node_runner.py<br/>(스레드 + 프로세스 관리)"]
+        Calc["iir_filter.py · motor_units.py<br/>load_cell_calibration.py<br/>linear_encoder_math.py<br/>(공유 계산)"]
+        Wire["topics.py · command_builders.py<br/>config.py · feedback_state.py<br/>(I/O 약속 · 설정 · 상태 모델)"]
     end
 
-    subgraph Core["core/ 공유 제어"]
-        Client["control_client.py<br/>GUI/CLI 공용 API"]
-        Commander["commander.py<br/>200 Hz 명령 발행"]
-        Monitor["monitor.py<br/>피드백 구독"]
-        NodeRunner["node_runner.py<br/>C++ 노드 실행/종료"]
-        Builders["command_builders.py<br/>v2 msg 또는 v1 string"]
-        Topics["topics.py"]
-        Config["config.py<br/>defaults.json loader"]
-        Feedback["feedback_state.py"]
-        Session["session/<br/>MotorSession/StateView/Flags"]
-        Experiments["experiments/<br/>HysteresisExperiment"]
-        IIR["iir_filter.py<br/>1차 IIR LPF 공유"]
-        Units["motor_units.py<br/>tick/mm 변환 공유"]
-        LCCal["load_cell_calibration.py<br/>캘리브레이션 JSON 해석"]
-        LEMath["linear_encoder_math.py<br/>count/mm 환산"]
+    subgraph Edge["장치 / 노드"]
+        Devices["devices/<br/>GUI 내장 USB 리더"]
+        Nodes["nodes/<br/>독립 ROS2 센서 노드"]
     end
 
-    subgraph Devices["devices/ GUI 내장 장치"]
-        LoadDevice["load_cell.py"]
-        LinearDevice["linear_encoder.py"]
-    end
-
-    subgraph Nodes["nodes/ 독립 센서 노드"]
-        LoadNode["load_cell_node.py"]
-        LinearNode["linear_encoder_node.py"]
-    end
-
-    MainWindow --> RuntimeInit
-    MainWindow --> Layout
-    MainWindow --> State
-    Layout --> Panels
-    Panels --> Actions
-    Actions --> Client
-    Actions --> Devices
-    RuntimeInit --> RuntimeComponents
-    RuntimeInit --> Commander
-    RuntimeInit --> Monitor
-    RuntimeInit --> NodeRunner
-    RuntimeInit --> Session
-    Client --> Builders
-    Client --> Commander
-    Client --> Experiments
-    Commander --> Topics
-    Monitor --> Topics
-    Monitor --> Feedback
-    Devices --> Commander
-    Devices --> IIR
-    Devices --> LCCal
-    Devices --> LEMath
-    Nodes --> Topics
-    Nodes --> IIR
-    Nodes --> LCCal
-    Nodes --> LEMath
-    Actions --> Units
-    GraphUpdate --> Session
-    StatusUpdate --> Session
+    Entry --> View
+    Entry --> Shared
+    View --> React
+    React --> APIs
+    React --> Devices
+    APIs --> Threads
+    APIs --> Wire
+    Threads --> Wire
+    Devices --> Calc
+    Nodes --> Calc
+    Nodes --> Wire
+    UIFolder --> APIs
 ```
+
+### 폴더별 파일 일람
+
+| 폴더 | 파일 | 역할 |
+| --- | --- | --- |
+| `ui/` | `main_window.py` | `MasterWindow` 진입 클래스 |
+| | `runtime_init.py` | threads/devices/session 초기화 + signal 연결 |
+| | `runtime_components.py` | `RuntimeThreads`, `DeviceReaders` 컨테이너 |
+| | `window_layout.py` | 패널 조립 |
+| | `window_state.py` | 화면 실행 상태 (`pos_offset`, `force_ctrl_mode` 등) |
+| | `widget_groups.py` | 패널별 위젯 묶음 dataclass |
+| | `graph_buffers.py` · `graph_update.py` | 속도/RT 그래프 NumPy 링버퍼 + 갱신 |
+| | `status_update.py` | 상태/에러/로드셀/엔코더 라벨 갱신 |
+| | `log_buffer.py` · `log_view_actions.py` | 로그 큐 + flush |
+| | `visibility_actions.py` | 패널/그래프 표시 토글 |
+| | `session_properties.py` | `window.motor_running` 등 호환 property |
+| | `styles.py` | 공용 Qt 스타일 상수 |
+| `panels/` | `top_status_panel.py` | 인터페이스 · 시스템 시작 · 진단 라벨 |
+| | `motion_control_panel.py` | 수동 RPM · 위치 · 토크 · 파형 · 리니어 엔코더 |
+| | `force_control_panel.py` | PID/Tanh 힘 제어 입력 |
+| | `load_cell_panel.py` | 로드셀 캘리브레이션 · Tare · soft limit |
+| | `hysteresis_panel.py` | 히스테리시스 자동 테스트 |
+| | `script_logging_panel.py` | CSV 로깅 · Python 모션 스크립트 |
+| | `graph_panel.py` · `log_viewer_panel.py` | 그래프 영역 · 로그 뷰 |
+| | `emergency_stop_panel.py` · `panel_visibility_bar.py` | 비상 정지 · 패널 토글 |
+| `actions/` | `system_actions.py` | 인터페이스 새로고침 · 시스템 시작/종료 · Fault 후속 |
+| | `motion_actions.py` | 수동 RPM/위치/토크 · 비상 정지 · mm↔tick 변환 |
+| | `waveform_actions.py` | C++ RT 파형 시작/정지 |
+| | `force_control_actions.py` | 힘 제어 시작/정지 · PID/Tanh 적용 |
+| | `hysteresis_actions.py` | 히스테리시스 시작/예약/중지/상태 표시 |
+| | `load_cell_actions.py` | 캘리브레이션 · Tare · 단위 · soft limit |
+| | `linear_encoder_actions.py` | 리니어 엔코더 연결 · zero · 표시 |
+| | `script_actions.py` · `logging_actions.py` | 스크립트 선택/실행 · CSV 로깅 |
+| `core/` | `control_client.py` | GUI/CLI 공용 고수준 제어 API |
+| | `session/` | `MotorSession`, `StateView`, `SessionFlags` |
+| | `experiments/` | `HysteresisExperiment` (GUI/CLI 공유 실행 흐름) |
+| | `commander.py` | `CommandThread` 200 Hz 명령 발행 + 센서 발행 + soft limit |
+| | `monitor.py` | `MonitorThread` 피드백 구독 + fault 자동 복구 |
+| | `node_runner.py` | C++ `epos_motor_node` 프로세스 시작/종료 |
+| | `command_builders.py` | `epos_interfaces` 메시지 빌더 |
+| | `topics.py` | ROS2 토픽 이름 상수 |
+| | `config.py` + `config/defaults.json` | 기본값 로더 (환경변수 override + 안전 clamp) |
+| | `feedback_state.py` | `MotorFeedback` / `RealtimeDiagnostics` / `LoadCellFeedback` / `LinearEncoderFeedback` |
+| | `iir_filter.py` | 1차 IIR LPF (GUI 리더 + 독립 노드 공유) |
+| | `motor_units.py` | 모터 tick/mm 변환 |
+| | `load_cell_calibration.py` | 캘리브레이션 JSON 해석 |
+| | `linear_encoder_math.py` | 엔코더 count/mm 환산 |
+| | `ros_bootstrap.py` · `ros_environment.py` | DDS 환경 · 인터페이스 감지 |
+| | `ros_messages.py` | `ForceCtrlCmd` / `WaveformCmd` 빌드 감지 |
+| | `motor_process.py` | `epos_motor_node` 실행 명령 조립 |
+| | `epos_errors.py` · `time_utils.py` · `phidget_support.py` | 보조 유틸 |
+| `devices/` | `load_cell.py` · `linear_encoder.py` | GUI 안에서 Phidget USB 직접 읽기 |
+| `nodes/` | `load_cell_node.py` · `linear_encoder_node.py` | GUI 없이 센서만 ROS2 토픽으로 퍼블리시 |
+| `logic/` | `hysteresis.py` · `motion_script.py` | 진폭 변환 수식 · 모션 스크립트 로더 |
 
 ## 3. 런타임 객체 관계
 
@@ -170,8 +168,8 @@ flowchart TD
 | 위치 이동 | `motion_control_panel.py` | `motion_actions.send_manual_pos` | `move_to_position_ticks` | `/target_position`, `/pos_speed_limit` | `target_pos_`, `pos_speed_limit_` |
 | 수동 토크 | `motion_control_panel.py` | `motion_actions.send_manual_trq` | `set_manual_torque` | `/target_torque` (‰ rated torque) | `target_trq_` |
 | 모드 전환 (CSV/CSP/CST) | `motion_control_panel.py` | `motion_actions.change_op_mode` | `set_operation_mode` | `/op_mode_cmd` (8/9/10) | `requested_op_mode_` |
-| 파형 시작/정지 | `motion_control_panel.py` | `waveform_actions` | `start_waveform / stop_waveform` | `/epos/waveform_cmd_v2` (v2) / `/epos/waveform_cmd` (v1) | `WaveformConfig` 더블버퍼 |
-| 힘 제어 시작/정지 | `force_control_panel.py` | `force_control_actions` | `start_force_control / stop_force_control` | `/epos/force_ctrl_cmd_v2` (v2) / `/epos/force_ctrl_cmd` (v1) | `force_ctrl_active_` + 게인 atomic |
+| 파형 시작/정지 | `motion_control_panel.py` | `waveform_actions` | `start_waveform / stop_waveform` | `/epos/waveform_cmd_v2` (`WaveformCmd`) | `WaveformConfig` 더블버퍼 |
+| 힘 제어 시작/정지 | `force_control_panel.py` | `force_control_actions` | `start_force_control / stop_force_control` | `/epos/force_ctrl_cmd_v2` (`ForceCtrlCmd`) | `force_ctrl_active_` + 게인 atomic |
 | 힘 제어 PID/Tanh 모드 | `force_control_panel.py` | `force_control_actions` | `apply_force_pid / apply_force_tanh` | 위 토픽 (ACTION_SET_PID / ACTION_SET_TANH) | `force_ctrl_mode_` atomic |
 | 로드셀 tare/단위/한계 | `load_cell_panel.py` | `load_cell_actions` | `set_force_limit`, `set_force_tare_offset`, `sync_force_tare_offsets` | `/load_cell/*` 발행 + force ctrl cmd | `force_limit_mN_`, `force_tare_chN_mN_` |
 | 리니어 엔코더 연결/zero | `motion_control_panel.py` | `linear_encoder_actions` | `LinearEncoderReader.zero` (로컬) | `/linear_encoder/position_count`, `/linear_encoder/position_mm` 발행 | `last_linear_count_`, `last_linear_um_` (CSV 로그 컬럼) |
@@ -185,7 +183,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start([loop tick<br/>target_dt = 1/cmd_hz]) --> Heartbeat{"_publish_heartbeat_if_due<br/>(10 Hz)"}
+    Run["run()"] --> Msg{"_ensure_command_<br/>messages_available"}
+    Msg --> Setup["_create_publishers<br/>명령/센서/heartbeat QoS"]
+    Setup --> Timing["_new_loop_timing<br/>200 Hz / 10 Hz / 100 Hz"]
+    Timing --> Start["_run_command_cycle<br/>loop tick"]
+
+    Start --> Periodic["_publish_periodic_feedback"]
+    Periodic --> Heartbeat{"_publish_heartbeat_if_due<br/>(10 Hz)"}
     Heartbeat -->|due| PubHb["publish<br/>/epos/heartbeat"]
     Heartbeat -->|skip| LCDue
     PubHb --> LCDue
@@ -198,13 +202,15 @@ flowchart TD
     LEDue -->|skip| Queues
     PubLE --> Queues
 
-    Queues["_drain_command_queues<br/>waveform / log / force_ctrl<br/>v2 msg 우선, fallback v1 string"] --> Mode{"_current_mode()"}
+    Queues["_drain_command_queues<br/>waveform / log / force_ctrl<br/>구조화 명령 발행<br/>(log_cmd만 문자열)"] --> Mode{"_current_mode()"}
 
     Mode -->|waveform| Sleep["_sleep_until_next_cycle<br/>(C++ RT가 파형 생성, Python은 대기)"]
-    Mode -->|manual / script| Compute["_compute_mode_target_rpm<br/>script면 MotionScript.func(t,state) 평가<br/>manual이면 _manual_target_rpm 사용"]
+    Mode -->|manual / script| PubMode["_publish_mode_target_rpm"]
+    PubMode --> Compute["_compute_mode_target_rpm<br/>script면 MotionScript.func(t,state) 평가<br/>manual이면 _manual_target_rpm 사용"]
     Compute --> Soft["_apply_soft_limit<br/>(GUI 내장 LoadCellReader 연결 시에만)"]
     Soft --> PubTarget["publish /target_speed<br/>(int(cmd_rpm))"]
     PubTarget --> Sleep
+    Sleep --> Start
 ```
 
 소프트 리미트는 **GUI 내장 `LoadCellReader`가 직접 USB로 연결된 경우에만** 동작합니다.
@@ -248,7 +254,7 @@ flowchart TD
     Node --> RtThread["control_loop_rt()<br/>1 kHz<br/>clock_nanosleep TIMER_ABSTIME"]
     Node --> Logger["AsyncLogger<br/>process_loop()<br/>10 ms drain<br/>(별도 스레드)"]
 
-    Subs --> Parse["commands/command_parsing.hpp<br/>force_command_from_msg (v2)<br/>parse_force_ctrl (v1)<br/>waveform_command_from_msg/string"]
+    Subs --> Parse["commands/command_parsing.hpp<br/>force_command_from_msg<br/>waveform_command_from_msg"]
     Parse --> Atomic[("atomic 상태<br/>target_velocity / target_position /<br/>target_torque / requested_op_mode /<br/>force_kp/ki/kd / force_max_rpm /<br/>force_limit_mN / WaveformConfig 더블버퍼<br/>last_force_chN_mN / last_heartbeat_ns ...")]
     Atomic --> RtThread
 
@@ -360,7 +366,7 @@ flowchart LR
 | 추가 작업 | 수정 후보 |
 | --- | --- |
 | 새 버튼/입력 추가 | `panels/*_panel.py`에서 위젯 생성, `actions/*_actions.py`에서 동작 구현 |
-| 새 제어 명령 추가 | `core/control_client.py`에 고수준 메서드 추가, `core/command_builders.py`에 메시지/문자열 생성 추가 |
+| 새 제어 명령 추가 | `core/control_client.py`에 고수준 메서드 추가, `core/command_builders.py`에 구조화 메시지 생성 추가 |
 | 새 ROS2 토픽 추가 | `core/topics.py`, `core/commander.py` 또는 `core/monitor.py`, C++ subscriber/publisher |
 | 새 센서 추가 | `devices/` 직접 리더, 필요 시 `nodes/` 독립 노드, 공통 계산은 `core/` |
 | 새 실험 플로우 추가 | `core/experiments/`에 상태 흐름, GUI action/CLI에서 같은 객체 재사용 |
